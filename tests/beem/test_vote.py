@@ -5,6 +5,8 @@ from __future__ import unicode_literals
 from builtins import super
 import unittest
 from parameterized import parameterized
+import pytz
+from datetime import datetime, timedelta
 from pprint import pprint
 from beem import Steem, exceptions
 from beem.comment import Comment
@@ -23,13 +25,13 @@ class Testcases(unittest.TestCase):
         nodelist = NodeList()
         nodelist.update_nodes(steem_instance=Steem(node=nodelist.get_nodes(normal=True, appbase=True), num_retries=10))
         cls.bts = Steem(
-            node=nodelist.get_nodes(appbase=False),
+            node=nodelist.get_nodes(),
             nobroadcast=True,
             keys={"active": wif},
             num_retries=10
         )
-        cls.appbase = Steem(
-            node=nodelist.get_nodes(normal=False, appbase=True),
+        cls.testnet = Steem(
+            node="https://testnet.steemitdev.com",
             nobroadcast=True,
             keys={"active": wif},
             num_retries=10
@@ -40,25 +42,25 @@ class Testcases(unittest.TestCase):
         cls.bts.set_default_account("test")
 
         acc = Account("holger80", steem_instance=cls.bts)
-        votes = acc.get_account_votes()
-        last_vote = votes[-1]
+        n_votes = 0
+        index = 0
+        while n_votes == 0:
+            comment = acc.get_feed(limit=30)[::-1][index]
+            votes = comment.get_votes()
+            n_votes = len(votes)
+            index += 1
 
-        cls.authorpermvoter = '@' + last_vote['authorperm'] + '|' + acc["name"]
+        last_vote = votes[0]
+
+        cls.authorpermvoter = construct_authorpermvoter(last_vote['author'], last_vote['permlink'], last_vote["voter"])
         [author, permlink, voter] = resolve_authorpermvoter(cls.authorpermvoter)
         cls.author = author
         cls.permlink = permlink
         cls.voter = voter
         cls.authorperm = construct_authorperm(author, permlink)
 
-    @parameterized.expand([
-        ("non_appbase"),
-        ("appbase"),
-    ])
-    def test_vote(self, node_param):
-        if node_param == "non_appbase":
-            bts = self.bts
-        else:
-            bts = self.appbase
+    def test_vote(self):
+        bts = self.bts
         vote = Vote(self.authorpermvoter, steem_instance=bts)
         self.assertEqual(self.voter, vote["voter"])
         self.assertEqual(self.author, vote["author"])
@@ -94,14 +96,14 @@ class Testcases(unittest.TestCase):
         self.assertTrue(vote.time is not None)
 
     @parameterized.expand([
-        ("non_appbase"),
-        ("appbase"),
+        ("normal"),
+        ("testnet"),
     ])
     def test_keyerror(self, node_param):
-        if node_param == "non_appbase":
+        if node_param == "normal":
             bts = self.bts
         else:
-            bts = self.appbase
+            bts = self.testnet
         with self.assertRaises(
             exceptions.VoteDoesNotExistsException
         ):
@@ -117,29 +119,17 @@ class Testcases(unittest.TestCase):
         ):
             Vote(construct_authorpermvoter("sdalfj", "dsfa", "asdfsldfjlasd"), steem_instance=bts)
 
-    @parameterized.expand([
-        ("non_appbase"),
-        ("appbase"),
-    ])
-    def test_activevotes(self, node_param):
-        if node_param == "non_appbase":
-            bts = self.bts
-        else:
-            bts = self.appbase
+    def test_activevotes(self):
+        bts = self.bts
         votes = ActiveVotes(self.authorperm, steem_instance=bts)
         votes.printAsTable()
         vote_list = votes.get_list()
         self.assertTrue(isinstance(vote_list, list))
 
-    @parameterized.expand([
-        ("non_appbase"),
-        ("appbase"),
-    ])
-    def test_accountvotes(self, node_param):
-        if node_param == "non_appbase":
-            bts = self.bts
-        else:
-            bts = self.appbase
-        votes = AccountVotes(self.author, steem_instance=bts)
+    def test_accountvotes(self):
+        bts = self.bts
+        utc = pytz.timezone('UTC')
+        limit_time = utc.localize(datetime.utcnow()) - timedelta(days=7)
+        votes = AccountVotes(self.author, start=limit_time, steem_instance=bts)
         self.assertTrue(len(votes) > 0)
         self.assertTrue(isinstance(votes[0], Vote))

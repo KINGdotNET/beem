@@ -99,6 +99,7 @@ class GrapheneRPC(object):
     :param bool autoconnect: When set to false, connection is performed on the first rpc call (default is True)
     :param bool use_condenser: Use the old condenser_api rpc protocol on nodes with version
         0.19.4 or higher. The settings has no effect on nodes with version of 0.19.3 or lower.
+    :param dict custom_chains: custom chain which should be added to the known chains
 
     Available APIs:
 
@@ -132,6 +133,14 @@ class GrapheneRPC(object):
         num_retries = kwargs.get("num_retries", -1)
         num_retries_call = kwargs.get("num_retries_call", 5)
         self.use_condenser = kwargs.get("use_condenser", False)
+        self.disable_chain_detection = kwargs.get("disable_chain_detection", False)
+        self.known_chains = known_chains
+        custom_chain = kwargs.get("custom_chains", {})
+        if len(custom_chain) > 0:
+            for c in custom_chain:
+                if c not in self.known_chains:
+                    self.known_chains[c] = custom_chain[c]
+
         self.nodes = Nodes(urls, num_retries, num_retries_call)
         if self.nodes.working_nodes_count == 0:
             self.current_rpc = self.rpc_methods["offline"]
@@ -210,6 +219,13 @@ class GrapheneRPC(object):
                 if self.ws:
                     self.ws.connect(self.url)
                     self.rpclogin(self.user, self.password)
+                if self.disable_chain_detection:
+                    # Set to appbase rpc format
+                    if self.current_rpc == self.rpc_methods['ws']:
+                        self.current_rpc = self.rpc_methods['wsappbase']
+                    else:
+                        self.current_rpc = self.rpc_methods['appbase']
+                    break
                 try:
                     props = None
                     if not self.use_condenser:
@@ -225,7 +241,7 @@ class GrapheneRPC(object):
                             self.current_rpc = self.rpc_methods['appbase']
                         props = self.get_config(api="database")
                 if props is None:
-                    raise RPCError("Could not recieve answer for get_config")
+                    raise RPCError("Could not receive answer for get_config")
                 if is_network_appbase_ready(props):
                     if self.ws:
                         self.current_rpc = self.rpc_methods["wsappbase"]
@@ -253,11 +269,17 @@ class GrapheneRPC(object):
         self.ws.close()
 
     def request_send(self, payload):
-        response = self.session.post(self.url,
-                                     data=payload,
-                                     headers=self.headers,
-                                     timeout=self.timeout,
-                                     auth=(self.user, self.password))
+        if self.user is not None and self.password is not None:
+            response = self.session.post(self.url,
+                                         data=payload,
+                                         headers=self.headers,
+                                         timeout=self.timeout,
+                                         auth=(self.user, self.password))
+        else:
+            response = self.session.post(self.url,
+                                         data=payload,
+                                         headers=self.headers,
+                                         timeout=self.timeout)
         if response.status_code == 401:
             raise UnauthorizedError
         return response.text
@@ -269,28 +291,36 @@ class GrapheneRPC(object):
         reply = self.ws.recv()
         return reply
 
+    def version_string_to_int(self, network_version):
+        version_list = network_version.split('.')
+        return int(int(version_list[0]) * 1e8 + int(version_list[1]) * 1e4 + int(version_list[2]))
+
     def get_network(self, props=None):
         """ Identify the connected network. This call returns a
             dictionary with keys chain_id, core_symbol and prefix
         """
         if props is None:
             props = self.get_config(api="database")
-        if "STEEMIT_CHAIN_ID" in props:
-            chain_id = props["STEEMIT_CHAIN_ID"]
-            network_version = props['STEEMIT_BLOCKCHAIN_VERSION']
-        elif "STEEM_CHAIN_ID" in props:
-            chain_id = props["STEEM_CHAIN_ID"]
-            network_version = props['STEEM_BLOCKCHAIN_VERSION']
-        else:
+        chain_id = None
+        network_version = None
+        for key in props:
+            if key[-8:] == "CHAIN_ID":
+                chain_id = props[key]
+            elif key[-18:] == "BLOCKCHAIN_VERSION":
+                network_version = props[key]
+
+        if chain_id is None:
             raise("Connecting to unknown network!")
         highest_version_chain = None
-        for k, v in list(known_chains.items()):
-            if v["chain_id"] == chain_id and v["min_version"] <= network_version:
+        for k, v in list(self.known_chains.items()):
+            if v["chain_id"] == chain_id and self.version_string_to_int(v["min_version"]) <= self.version_string_to_int(network_version):
                 if highest_version_chain is None:
+                    highest_version_chain = v
+                elif v["min_version"] == '0.19.5' and self.use_condenser:
                     highest_version_chain = v
                 elif v["min_version"] == '0.0.0' and self.use_condenser:
                     highest_version_chain = v
-                elif v["min_version"] > highest_version_chain["min_version"] and not self.use_condenser:
+                elif self.version_string_to_int(v["min_version"]) > self.version_string_to_int(highest_version_chain["min_version"]) and not self.use_condenser:
                     highest_version_chain = v
         if highest_version_chain is None:
             raise("Connecting to unknown network!")

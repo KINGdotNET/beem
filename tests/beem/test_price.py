@@ -17,7 +17,7 @@ class Testcases(unittest.TestCase):
         nodelist = NodeList()
         nodelist.update_nodes(steem_instance=Steem(node=nodelist.get_nodes(normal=True, appbase=True), num_retries=10))
         steem = Steem(
-            node=nodelist.get_nodes(appbase=False),
+            node=nodelist.get_nodes(),
             nobroadcast=True,
             num_retries=10
         )
@@ -132,4 +132,4 @@ class Testcases(unittest.TestCase):
         order = {"date": "1900-01-01T00:00:00", "current_pays": "2 SBD", "open_pays": "1 STEEM"}
         filledOrder = FilledOrder(order)
         self.assertTrue(repr(filledOrder) is not None)
-        self.assertEqual(filledOrder.json()["current_pays"], "2.000 SBD")
+        self.assertEqual(filledOrder.json()["current_pays"], Amount("2.000 SBD").json())

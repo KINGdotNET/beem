@@ -21,11 +21,16 @@ known_prefixes = [
     "BTS",
     "MUSE",
     "TEST",
+    "TST",
     "STM",
     "STX",
     "GLX",
     "GLS",
-    "EOS"
+    "EOS",
+    "VIT",
+    "WKA",
+    "EUR",
+    "WLS",
 ]
 
 
@@ -56,6 +61,8 @@ class Base58(object):
     """
     def __init__(self, data, prefix=PREFIX):
         self._prefix = prefix
+        if isinstance(data, Base58):
+            data = repr(data)
         if all(c in string.hexdigits for c in data):
             self._hex = data
         elif data[0] == "5" or data[0] == "6":
@@ -84,7 +91,7 @@ class Base58(object):
         elif _format.upper() in known_prefixes:
             return _format.upper() + str(self)
         else:
-            log.warn("Format %s unkown. You've been warned!\n" % _format)
+            log.warn("Format %s unknown. You've been warned!\n" % _format)
             return _format.upper() + str(self)
 
     def __repr__(self):

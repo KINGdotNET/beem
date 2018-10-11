@@ -18,9 +18,22 @@ class Signed_Transaction(GrapheneSigned_Transaction):
         :param num refPrefix: parameter ref_block_prefix (see ``getBlockParams``)
         :param str expiration: expiration date
         :param Array operations:  array of operations
+        :param dict custom_chains: custom chain which should be added to the known chains
     """
     def __init__(self, *args, **kwargs):
+        self.known_chains = known_chains
+        custom_chain = kwargs.get("custom_chains", {})
+        if len(custom_chain) > 0:
+            for c in custom_chain:
+                if c not in self.known_chains:
+                    self.known_chains[c] = custom_chain[c]
         super(Signed_Transaction, self).__init__(*args, **kwargs)
+
+    def add_custom_chains(self, custom_chain):
+        if len(custom_chain) > 0:
+            for c in custom_chain:
+                if c not in self.known_chains:
+                    self.known_chains[c] = custom_chain[c]
 
     def sign(self, wifkeys, chain=u"STEEM"):
         return super(Signed_Transaction, self).sign(wifkeys, chain)
@@ -32,4 +45,4 @@ class Signed_Transaction(GrapheneSigned_Transaction):
         return Operation
 
     def getKnownChains(self):
-        return known_chains
+        return self.known_chains

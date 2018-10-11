@@ -300,22 +300,21 @@ class Testcases(unittest.TestCase):
             **{
                 "owner": "alice",
                 "orderid": 492991,
-                "amount_to_sell": ["1", 3, "@@000000013"],
+                "amount_to_sell": {"amount": "1", "precision": 3, "nai": "@@000000013"},
                 "exchange_rate": {
-                    "base": ["1", 3, "@@000000013"],
-                    "quote": ["10", 3, "@@000000021"]
+                    "base": {"amount": "1", "precision": 3, "nai": "@@000000013"},
+                    "quote": {"amount": "10", "precision": 3, "nai": "@@000000021"}
                 },
                 "fill_or_kill": False,
                 "expiration": "2017-05-12T23:11:13",
                 "prefix": default_prefix,
             })
 
-        self.cm = ('f68585abf4dce7c80457011505616c696365bf85070001000000000000'
-                   '0003404030303030303030313300010000000000000003404030303030'
-                   '30303031330a0000000000000003404030303030303030323111411659'
-                   '0001205533a7f4eb0be6e5d1db4a67d7bfa693b7b81aa0aba01726b609'
-                   '01364785388440a8c5baf2a94c99465447af7a615ec9898d269560fa3a'
-                   'e56ed8f73e12411acf')
+        self.cm = ('f68585abf4dce7c80457011505616c696365bf850700010000000000000'
+                   '0035342440000000000010000000000000003534244000000000a000000'
+                   '0000000003535445454d00001141165900011f20173e93afb4b7087c768'
+                   '366e2e1f0e7627304ba3ccab0479d03612e847451012036d20cd2074efb'
+                   'ceaed6b8bf8336ace08ae7d9949d6e070492bb964123ab77')
         self.doit()
 
     def test_account_update(self):
@@ -653,6 +652,24 @@ class Testcases(unittest.TestCase):
                    "b9f2405478badadb4c")
         self.doit()
 
+    def test_witness_set_properties(self):
+        self.op = operations.Witness_set_properties(
+            **{
+                "owner": "init-1",
+                "props": [
+                    ["key", "032d2a4af3e23294e0a1d9dbc46e0272d8e1977ce2ae3349527cc90fe1cc9c5db9"],
+                    ["account_creation_fee", "d0070000000000000354455354530000"]
+                ],
+                "prefix": default_prefix
+            })
+
+        self.cm = ('f68585abf4dce7c80457012a06696e69742d3102146163636f756e745f63726561746'
+                   '96f6e5f66656510d0070000000000000354455354530000036b657921032d2a4af3e2'
+                   '3294e0a1d9dbc46e0272d8e1977ce2ae3349527cc90fe1cc9c5db9000001203f74f25'
+                   '4cff2d6d8c0c8798ee0c73fa93e32f97ccdd5cc42fa0f0d24c48a9fe218d5489dd16b'
+                   'd538409e11bea4ba92230ac8df0e5d2b2f0e3f8bf613b93b7a9c')
+        self.doit()
+
     def test_witness_vote(self):
         self.op = operations.Account_witness_vote(**{
             "account": "xeroc",
@@ -856,23 +873,23 @@ class Testcases(unittest.TestCase):
             **{
                 "from": "alice",
                 "to": "bob",
-                "sbd_amount": ["1000", 3, "@@000000013"],
-                "steem_amount": ["0", 3, "@@000000021"],
+                "sbd_amount": {"amount": "1000", "precision": 3, "nai": "@@000000013"},
+                "steem_amount": {"amount": "0", "precision": 3, "nai": "@@000000021"},
                 "escrow_id": 23456789,
                 "agent": "charlie",
-                "fee": ["100", 3, "@@000000013"],
+                "fee": {"amount": "100", "precision": 3, "nai": "@@000000013"},
                 "json_meta": "{}",
                 "ratification_deadline": "2017-02-26T11:22:39",
                 "escrow_expiration": "2017-02-28T11:22:39",
                 "prefix": default_prefix,
             })
 
-        self.cm = ('f68585abf4dce7c80457011b05616c69636503626f6207636861726c69'
-                   '6515ec6501e80300000000000003404030303030303030313300000000'
-                   '0000000003404030303030303030323164000000000000000340403030'
-                   '303030303031337fbab2587f5db558027b7d0001203010ea007a004440'
-                   '5789923653541fafb0e72c9f5f14cff24307d9fc68d3e3914bd0eca8d7'
-                   'ab62a9c639a49594dd35dc06d361ac1e4aea5f9536fc3c9315a5db')
+        self.cm = ('f68585abf4dce7c80457011b05616c69636503626f6207636861726c696'
+                   '515ec6501e8030000000000000353424400000000000000000000000003'
+                   '535445454d0000640000000000000003534244000000007fbab2587f5db'
+                   '558027b7d00011f2b07b6e67afda26064932fa5266f5e7f39ce4ac77662'
+                   'ba30e64c2b930d4744313bcc5959d8dd53fc614c4274a72c5df5c9106a7'
+                   '4b65f9c5eeec92789d47996e0')
         self.doit()
 
     def test_escrow_dispute(self):
@@ -898,16 +915,16 @@ class Testcases(unittest.TestCase):
                 "to": "bob",
                 "who": "charlie",
                 "escrow_id": 72526562,
-                "sbd_amount": ["5000", 3, "@@000000013"],
-                "steem_amount": ["0", 3, "@@000000021"],
+                "sbd_amount": {"amount": "5000", "precision": 3, "nai": "@@000000013"},
+                "steem_amount": {"amount": "0", "precision": 3, "nai": "@@000000021"},
                 "prefix": default_prefix,
             })
 
-        self.cm = ('f68585abf4dce7c80457011d05616c69636503626f6207636861726c69'
-                   '65e2aa5204881300000000000003404030303030303030313300000000'
-                   '000000000340403030303030303032310001201bcc5cb0f6bc1083dd24'
-                   'ddcd7415d69a57d54b065c9e6c96ebc04a68ed709758438b226ee19cca'
-                   '39b6df49406f029f61d59a29f9cd14bc081a551fd19df199f1')
+        self.cm = ('f68585abf4dce7c80457011d05616c69636503626f6207636861726c6965'
+                   'e2aa52048813000000000000035342440000000000000000000000000353'
+                   '5445454d000000011f12b07aefeb0585ba49ab267c310befe30aeab65c53'
+                   '86057277bcca71901eec367081b35d919e23ec54e311e266722299185ec6'
+                   '2dd10571874c935cc9bec6d350')
         self.doit()
 
     def test_escrow_approve(self):
@@ -945,17 +962,16 @@ class Testcases(unittest.TestCase):
         self.op = operations.Claim_reward_balance(
             **{
                 "account": "alice",
-                "reward_steem": ["17", 3, "@@000000021"],
-                "reward_sbd": ["11", 3, "@@000000013"],
-                "reward_vests": ["185025103", 6, "@@000000037"],
+                "reward_steem": {"amount": "17", "precision": 3, "nai": "@@000000021"},
+                "reward_sbd": {"amount": "11", "precision": 3, "nai": "@@000000013"},
+                "reward_vests": {"amount": "185025103", "precision": 6, "nai": "@@000000037"},
                 "prefix": default_prefix,
             })
 
-        self.cm = ('f68585abf4dce7c80457012705616c6963651100000000000000034040'
-                   '3030303030303032310b00000000000000034040303030303030303133'
-                   '4f42070b000000000640403030303030303033370001205caa9ba8b92b'
-                   '814f3d1ecfb581d8d98f898b4c174200ee9bc5c9fb9c98b0e6672fbb67'
-                   'cccc2fe64df386285270b9a1f67b2d1a69883a11ce9197b52f0c227649')
+        self.cm = ('f68585abf4dce7c80457012705616c696365110000000000000003535445454d00000'
+                   'b0000000000000003534244000000004f42070b00000000065645535453000000011f'
+                   '3eedc4af6e853ff473ef90c4ca8fc039415e6f35fbc7246d0a3b6a584dcc20ac33185'
+                   '3ddd5e3610a4ac02bba668b5ccc8ee7a3977081627ca4fbff6d43c87f3c')
         self.doit()
 
     def test_delegate_vesting_shares(self):
@@ -963,21 +979,20 @@ class Testcases(unittest.TestCase):
             **{
                 "delegator": "alice",
                 "delegatee": "bob",
-                "vesting_shares": ["94599167138276", 6, "@@000000037"],
+                "vesting_shares": {"amount": "94599167138276", "precision": 6, "nai": "@@000000037"},
                 "prefix": default_prefix,
             })
 
-        self.cm = ('f68585abf4dce7c80457012805616c69636503626f62e4d9c095095600'
-                   '0006404030303030303030333700011f4573eaedaff15f6398cdb12a44'
-                   '252ef484b163e5e426b6c777005484d3c6c2aa137b9d4a1265d7360192'
-                   'be339d281c7725f0087ae39bd9acd0f2aa3a7fd96369')
+        self.cm = ('f68585abf4dce7c80457012805616c69636503626f62e4d9c095095600000656455354530000000'
+                   '12044bd813d30bbd4f4e0749d23d275ba12de2a6b6c6c91ef570c5a7f4f1d444c590f17016b02b8'
+                   'b36f77aa63fa0d8278fc07472c5d20927d2b7fdebcc3820da489')
         self.doit()
 
     def test_account_create_with_delegation(self):
         self.op = operations.Account_create_with_delegation(
             **{
-                "fee": ["3000", 3, "@@000000021"],
-                "delegation": ["0", 6, "@@000000037"],
+                "fee": {"amount": "3000", "precision": 3, "nai": "@@000000021"},
+                "delegation": {"amount": "0", "precision": 6, "nai": "@@000000037"},
                 "creator": "steemit",
                 "new_account_name": "alice",
                 "owner": {
@@ -1016,17 +1031,16 @@ class Testcases(unittest.TestCase):
                 "prefix": default_prefix,
             })
 
-        self.cm = ('f68585abf4dce7c804570129b80b000000000000034040303030303030'
-                   '303231000000000000000006404030303030303030333707737465656d'
-                   '697405616c696365010000000001024b881ad188574738041f9ad6621f'
-                   '5fd784d51ce19e8379285d800aff65ef72db010001000000000102beb5'
-                   'e1610bde9c7c7f91d181356653981a60de0c5753f88bc31b29e6853866'
-                   'c2010001000000000103e6985b4e8884a4a225030a8521c688a1c7c4ef'
-                   '2fcfc0398e1a7024b0544e6c7b010002a1109a3fdce014bb6a720432f7'
-                   '4e38731b420cbd2ac6137de140904b142da2d4027b7d0000011f7fa92a'
-                   '03a864d9bef607e31c4bdf9611e3500acf3d2be60f464f9ecd6d407117'
-                   '76e0971c759b0b7ce84539716f74e17dad1634aff527151a2ee030675f'
-                   'a866eb')
+        self.cm = ('f68585abf4dce7c804570129b80b00000000000003535445454d00000000000'
+                   '000000000065645535453000007737465656d697405616c6963650100000000'
+                   '01024b881ad188574738041f9ad6621f5fd784d51ce19e8379285d800aff65e'
+                   'f72db010001000000000102beb5e1610bde9c7c7f91d181356653981a60de0c'
+                   '5753f88bc31b29e6853866c2010001000000000103e6985b4e8884a4a225030'
+                   'a8521c688a1c7c4ef2fcfc0398e1a7024b0544e6c7b010002a1109a3fdce014'
+                   'bb6a720432f74e38731b420cbd2ac6137de140904b142da2d4027b7d0000012'
+                   '00545101c8bcbdb3c4d5029ed2b160ccb33e6b3c3d96949ff528d8fdc30935b'
+                   '065bfc937f01fdb8328bd693fda9687335bd341c8ffce2f7c93bcb98acf1382'
+                   'd93')
         self.doit()
 
 

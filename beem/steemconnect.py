@@ -50,7 +50,7 @@ class SteemConnect(object):
 
         .. testcode::
 
-            'https://v2.steemconnect.com/sign/transfer?from=test&to=test1&amount=1.000+STEEM&memo=test'
+            'https://steemconnect.com/sign/transfer?from=test&to=test1&amount=1.000+STEEM&memo=test'
 
         .. testoutput::
 
@@ -59,18 +59,19 @@ class SteemConnect(object):
             from beembase import operations
             from beem.steemconnect import SteemConnect
             from pprint import pprint
-            stm = Steem()
+            stm = Steem(nobroadcast=True, unsigned=True)
+            sc2 = SteemConnect(steem_instance=stm)
             tx = TransactionBuilder(steem_instance=stm)
             op = operations.Transfer(**{"from": 'test',
                                         "to": 'test1',
                                         "amount": '1.000 STEEM',
                                         "memo": 'test'})
             tx.appendOps(op)
-            pprint(sc2.url_from_tx(tx)
+            pprint(sc2.url_from_tx(tx.json()))
 
         .. testcode::
 
-            'https://v2.steemconnect.com/sign/transfer?from=test&to=test1&amount=1.000+STEEM&memo=test'
+            'https://steemconnect.com/sign/transfer?from=test&to=test1&amount=1.000+STEEM&memo=test'
 
     """
 
@@ -133,6 +134,7 @@ class SteemConnect(object):
         """ Calls the me function from steemconnect
 
         .. code-block:: python
+
             from beem.steemconnect import SteemConnect
             sc2 = SteemConnect()
             sc2.steem.wallet.unlock("supersecret-passphrase")
@@ -288,6 +290,9 @@ class SteemConnect(object):
         if redirect_uri is not None:
             params.update({"redirect_uri": redirect_uri})
 
+        for key in params:
+            if isinstance(params[key], list):
+                params[key] = json.dumps(params[key])
         params = urlencode(params)
         url = urljoin(base_url, "sign/%s" % operation)
         url += "?" + params

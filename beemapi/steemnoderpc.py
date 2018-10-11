@@ -6,7 +6,6 @@ from builtins import bytes, int, str
 import re
 import sys
 from .graphenerpc import GrapheneRPC
-from beemgraphenebase.chains import known_chains
 from . import exceptions
 import logging
 log = logging.getLogger(__name__)
@@ -145,9 +144,9 @@ class SteemNodeRPC(GrapheneRPC):
             raise exceptions.UnkownKey(msg)
         elif re.search("Assert Exception:v.is_object(): Input data have to treated as object", msg):
             raise exceptions.UnhandledRPCError("Use Operation(op, appbase=True) to prevent error: " + msg)
-        elif re.search("Client returned invalid format. Expected JSON!", msg):
-            self._switch_to_next_node(msg)
-            doRetry = True
+        # elif re.search("Client returned invalid format. Expected JSON!", msg):
+        #     self._switch_to_next_node(msg)
+        #    doRetry = True
         elif msg:
             raise exceptions.UnhandledRPCError(msg)
         else:

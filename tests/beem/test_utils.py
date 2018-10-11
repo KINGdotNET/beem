@@ -3,7 +3,7 @@ from __future__ import division
 from __future__ import print_function
 from __future__ import unicode_literals
 import unittest
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from beem.utils import (
     formatTimedelta,
     assets_from_string,
@@ -15,7 +15,10 @@ from beem.utils import (
     derive_permlink,
     resolve_root_identifier,
     make_patch,
-    remove_from_dict
+    remove_from_dict,
+    formatToTimeStamp,
+    formatTimeString,
+    addTzInfo
 )
 
 
@@ -37,12 +40,16 @@ class Testcases(unittest.TestCase):
         self.assertEqual(assets_from_string('BTSBOTS.S1:BTS'), ['BTSBOTS.S1', 'BTS'])
 
     def test_authorperm_resolve(self):
-        self.assertEqual(resolve_authorperm('theaussiegame/cryptokittie-giveaway-number-2'),
-                         ('theaussiegame', 'cryptokittie-giveaway-number-2'))
-        self.assertEqual(resolve_authorperm('holger80/virtuelle-cloud-mining-ponzi-schemen-auch-bekannt-als-hypt'),
-                         ('holger80', 'virtuelle-cloud-mining-ponzi-schemen-auch-bekannt-als-hypt'))
-        self.assertEqual(resolve_authorperm('https://steemit.com/deutsch/holger80/virtuelle-cloud-mining-ponzi-schemen-auch-bekannt-als-hypt'),
-                         ('holger80', 'virtuelle-cloud-mining-ponzi-schemen-auch-bekannt-als-hypt'))
+        self.assertEqual(resolve_authorperm('https://d.tube/#!/v/pottlund/m5cqkd1a'),
+                         ('pottlund', 'm5cqkd1a'))
+        self.assertEqual(resolve_authorperm("https://steemit.com/witness-category/@gtg/24lfrm-gtg-witness-log"),
+                         ('gtg', '24lfrm-gtg-witness-log'))
+        self.assertEqual(resolve_authorperm("@gtg/24lfrm-gtg-witness-log"),
+                         ('gtg', '24lfrm-gtg-witness-log'))
+        self.assertEqual(resolve_authorperm("https://busy.org/@gtg/24lfrm-gtg-witness-log"),
+                         ('gtg', '24lfrm-gtg-witness-log'))
+        self.assertEqual(resolve_authorperm('https://dlive.io/livestream/atnazo/61dd94c1-8ff3-11e8-976f-0242ac110003'),
+                         ('atnazo', '61dd94c1-8ff3-11e8-976f-0242ac110003'))
 
     def test_authorpermvoter_resolve(self):
         self.assertEqual(resolve_authorpermvoter('theaussiegame/cryptokittie-giveaway-number-2|test'),
@@ -77,3 +84,21 @@ class Testcases(unittest.TestCase):
         self.assertEqual(remove_from_dict(b, ['a'], keep_keys=False), {'b': 2})
         self.assertEqual(remove_from_dict(b, [], keep_keys=True), {})
         self.assertEqual(remove_from_dict(a, ['a', 'b'], keep_keys=False), {})
+
+    def test_formatDateTimetoTimeStamp(self):
+        t = "1970-01-01T00:00:00"
+        t = formatTimeString(t)
+        timestamp = formatToTimeStamp(t)
+        self.assertEqual(timestamp, 0)
+        t2 = "2018-07-10T10:08:39"
+        timestamp = formatToTimeStamp(t2)
+        self.assertEqual(timestamp, 1531217319)
+        t3 = datetime(2018, 7, 10, 10, 8, 39)
+        timestamp = formatToTimeStamp(t3)
+        self.assertEqual(timestamp, 1531217319)
+
+    def test_formatTimeString(self):
+        t = "2018-07-10T10:08:39"
+        t = formatTimeString(t)
+        t2 = addTzInfo(datetime(2018, 7, 10, 10, 8, 39))
+        self.assertEqual(t, t2)

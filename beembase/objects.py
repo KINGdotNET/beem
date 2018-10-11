@@ -19,51 +19,84 @@ from beemgraphenebase.objects import GrapheneObject, isArgsThisClass
 from .objecttypes import object_type
 from beemgraphenebase.account import PublicKey
 from beemgraphenebase.objects import Operation as GPHOperation
-from .operationids import operations
+from beemgraphenebase.chains import known_chains
+from .operationids import operations, operations_wls
 import struct
 default_prefix = "STM"
-
-asset_precision = {
-    "STEEM": 3,
-    "VESTS": 6,
-    "SBD": 3,
-    "GBG": 3,
-    "GOLOS": 3
-}
 
 
 @python_2_unicode_compatible
 class Amount(object):
-    def __init__(self, d):
+    def __init__(self, d, prefix=default_prefix):
         if isinstance(d, string_types):
-            self.amount, self.asset = d.strip().split(" ")
-            if self.asset in asset_precision:
-                self.precision = asset_precision[self.asset]
-            else:
+            self.amount, self.symbol = d.strip().split(" ")
+            self.precision = None
+            for c in known_chains:
+                if self.precision is not None:
+                    continue
+                if known_chains[c]["prefix"] != prefix:
+                    continue
+                for asset in known_chains[c]["chain_assets"]:
+                    if self.precision is not None:
+                        continue
+                    if asset["symbol"] == self.symbol:
+                        self.precision = asset["precision"]
+                        self.asset = asset["asset"]
+                    elif asset["asset"] == self.symbol:
+                        self.precision = asset["precision"]
+                        self.asset = asset["asset"]
+            if self.precision is None:
                 raise Exception("Asset unknown")
             self.amount = int(float(self.amount) * 10 ** self.precision)
 
-            self.str_repr = '{:.{}f} {}'.format((float(self.amount) / 10 ** self.precision), self.precision, self.asset)
+            self.str_repr = '{:.{}f} {}'.format((float(self.amount) / 10 ** self.precision), self.precision, self.symbol)
         elif isinstance(d, list):
             self.amount = d[0]
             self.asset = d[2]
             self.precision = d[1]
+            self.symbol = None
+            for c in known_chains:
+                if known_chains[c]["prefix"] != prefix:
+                    continue
+                for asset in known_chains[c]["chain_assets"]:
+                    if asset["asset"] == self.asset:
+                        self.symbol = asset["symbol"]
+            if self.symbol is None:
+                raise ValueError("Unknown NAI, cannot resolve symbol")
             a = Array([String(d[0]), d[1], d[2]])
             self.str_repr = str(a.__str__())
+        elif isinstance(d, dict) and "nai" in d:
+            self.asset = d["nai"]
+            self.symbol = None
+            for c in known_chains:
+                if known_chains[c]["prefix"] != prefix:
+                    continue
+                for asset in known_chains[c]["chain_assets"]:
+                    if asset["asset"] == d["nai"]:
+                        self.symbol = asset["symbol"]
+            if self.symbol is None:
+                raise ValueError("Unknown NAI, cannot resolve symbol")
+            self.amount = d["amount"]
+            self.precision = d["precision"]
+            self.str_repr = json.dumps(d)
         else:
             self.amount = d.amount
-            self.asset = d.symbol
+            self.symbol = d.symbol
+            self.asset = d.asset["asset"]
             self.precision = d.asset["precision"]
             self.amount = int(float(self.amount) * 10 ** self.precision)
-            self.str_repr = json.dumps((d.json()))
+            self.str_repr = str(d)
+            # self.str_repr = json.dumps((d.json()))
+            # self.str_repr = '{:.{}f} {}'.format((float(self.amount) / 10 ** self.precision), self.precision, self.asset)
 
     def __bytes__(self):
         # padding
-        asset = self.asset + "\x00" * (7 - len(self.asset))
+        symbol = self.symbol + "\x00" * (7 - len(self.symbol))
         return (struct.pack("<q", int(self.amount)) + struct.pack("<b", self.precision) +
-                py23_bytes(asset, "ascii"))
+                py23_bytes(symbol, "ascii"))
 
     def __str__(self):
+        # return json.dumps({"amount": self.amount, "precision": self.precision, "nai": self.asset})
         return self.str_repr
 
 
@@ -71,6 +104,7 @@ class Amount(object):
 class Operation(GPHOperation):
     def __init__(self, *args, **kwargs):
         self.appbase = kwargs.pop("appbase", False)
+        self.prefix = kwargs.pop("prefix", default_prefix)
         super(Operation, self).__init__(*args, **kwargs)
 
     def _getklass(self, name):
@@ -79,13 +113,15 @@ class Operation(GPHOperation):
         return class_
 
     def operations(self):
+        if self.prefix == "WLS":
+            return operations_wls
         return operations
 
     def getOperationNameForId(self, i):
         """ Convert an operation id into the corresponding string
         """
-        for key in operations:
-            if int(operations[key]) is int(i):
+        for key in self.operations():
+            if int(self.operations()[key]) is int(i):
                 return key
         return "Unknown Operation ID %d" % i
 
@@ -131,8 +167,9 @@ class WitnessProps(GrapheneObject):
         else:
             if len(args) == 1 and len(kwargs) == 0:
                 kwargs = args[0]
+            prefix = kwargs.get("prefix", default_prefix)
             super(WitnessProps, self).__init__(OrderedDict([
-                ('account_creation_fee', Amount(kwargs["account_creation_fee"])),
+                ('account_creation_fee', Amount(kwargs["account_creation_fee"], prefix=prefix)),
                 ('maximum_block_size', Uint32(kwargs["maximum_block_size"])),
                 ('sbd_interest_rate', Uint16(kwargs["sbd_interest_rate"])),
             ]))
@@ -145,9 +182,10 @@ class Price(GrapheneObject):
         else:
             if len(args) == 1 and len(kwargs) == 0:
                 kwargs = args[0]
+            prefix = kwargs.get("prefix", default_prefix)
             super(Price, self).__init__(OrderedDict([
-                ('base', Amount(kwargs["base"])),
-                ('quote', Amount(kwargs["quote"]))
+                ('base', Amount(kwargs["base"], prefix=prefix)),
+                ('quote', Amount(kwargs["quote"], prefix=prefix))
             ]))
 
 
@@ -205,10 +243,11 @@ class ExchangeRate(GrapheneObject):
             if len(args) == 1 and len(kwargs) == 0:
                 kwargs = args[0]
 
+            prefix = kwargs.get("prefix", default_prefix)
             super(ExchangeRate, self).__init__(
                 OrderedDict([
-                    ('base', Amount(kwargs["base"])),
-                    ('quote', Amount(kwargs["quote"])),
+                    ('base', Amount(kwargs["base"], prefix=prefix)),
+                    ('quote', Amount(kwargs["quote"], prefix=prefix)),
                 ]))
 
 
@@ -256,7 +295,14 @@ class CommentOptionExtensions(Static_variant):
 
     """
     def __init__(self, o):
-        type_id, data = o
+        if type(o) == dict and 'type' in o and 'value' in o:
+            if o['type'] == "comment_payout_beneficiaries":
+                type_id = 0
+            else:
+                type_id = ~0
+            data = o['value']
+        else:
+            type_id, data = o
         if type_id == 0:
             data = (Beneficiaries(data))
         else:

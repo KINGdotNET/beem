@@ -39,8 +39,7 @@ def varintdecode(data):
     """Varint decoding."""
     shift = 0
     result = 0
-    for c in data:
-        b = ord(c)
+    for b in bytes(data):
         result |= ((b & 0x7f) << shift)
         if not (b & 0x80):
             break
@@ -161,6 +160,21 @@ class Int64(object):
 
 
 @python_2_unicode_compatible
+class HexString(object):
+    def __init__(self, d):
+        self.data = d
+
+    def __bytes__(self):
+        """Returns bytes representation."""
+        d = bytes(unhexlify(bytes(self.data, 'ascii')))
+        return varint(len(d)) + d
+
+    def __str__(self):
+        """Returns data as string."""
+        return '%s' % str(self.data)
+
+
+@python_2_unicode_compatible
 class String(object):
     def __init__(self, d):
         self.data = d
@@ -178,7 +192,7 @@ class String(object):
         r = []
         for s in self.data:
             o = ord(s)
-            if o <= 7:
+            if (o <= 7) or (o == 11) or (o > 13 and o < 32):
                 r.append("u%04x" % o)
             elif o == 8:
                 r.append("b")
@@ -186,14 +200,10 @@ class String(object):
                 r.append("\t")
             elif o == 10:
                 r.append("\n")
-            elif o == 11:
-                r.append("u%04x" % o)
             elif o == 12:
                 r.append("f")
             elif o == 13:
                 r.append("\r")
-            elif o > 13 and o < 32:
-                r.append("u%04x" % o)
             else:
                 r.append(s)
         return bytes("".join(r), "utf-8")
@@ -201,16 +211,11 @@ class String(object):
 
 @python_2_unicode_compatible
 class Bytes(object):
-    def __init__(self, d, length=None):
+    def __init__(self, d):
         self.data = d
-        if length:
-            self.length = length
-        else:
-            self.length = len(self.data)
 
     def __bytes__(self):
         """Returns data as bytes."""
-        # FIXME constraint data to self.length
         d = unhexlify(bytes(self.data, 'utf-8'))
         return varint(len(d)) + d
 

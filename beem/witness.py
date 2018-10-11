@@ -117,15 +117,16 @@ class Witness(BlockchainObject):
 
     def feed_publish(self,
                      base,
-                     quote="1.000 STEEM",
+                     quote=None,
                      account=None):
         """ Publish a feed price as a witness.
             :param float base: USD Price of STEEM in SBD (implied price)
-            :param float quote: (optional) Quote Price. Should be 1.000, unless
+            :param float quote: (optional) Quote Price. Should be 1.000 (default), unless
             we are adjusting the feed to support the peg.
             :param str account: (optional) the source account for the transfer
             if not self["owner"]
         """
+        quote = quote if quote is not None else "1.000 %s" % (self.steem.symbol)
         if not account:
             account = self["owner"]
         if not account:
@@ -137,18 +138,18 @@ class Witness(BlockchainObject):
         elif isinstance(base, string_types):
             base = Amount(base, steem_instance=self.steem)
         else:
-            base = Amount(base, "SBD", steem_instance=self.steem)
+            base = Amount(base, self.steem.sbd_symbol, steem_instance=self.steem)
 
         if isinstance(quote, Amount):
             quote = Amount(quote, steem_instance=self.steem)
         elif isinstance(quote, string_types):
             quote = Amount(quote, steem_instance=self.steem)
         else:
-            quote = Amount(quote, "STEEM", steem_instance=self.steem)
+            quote = Amount(quote, self.steem.steem_symbol, steem_instance=self.steem)
 
-        if not base.symbol == "SBD":
+        if not base.symbol == self.steem.sbd_symbol:
             raise AssertionError()
-        if not quote.symbol == "STEEM":
+        if not quote.symbol == self.steem.steem_symbol:
             raise AssertionError()
 
         op = operations.Feed_publish(
@@ -268,6 +269,11 @@ class Witnesses(WitnessesObject):
     """
     def __init__(self, lazy=False, full=True, steem_instance=None):
         self.steem = steem_instance or shared_steem_instance()
+        self.lazy = lazy
+        self.full = full
+        self.refresh()
+
+    def refresh(self):
         self.steem.rpc.set_next_node_on_empty_reply(False)
         if self.steem.rpc.get_use_appbase():
             self.active_witnessess = self.steem.rpc.get_active_witnesses(api="database")['witnesses']
@@ -277,10 +283,11 @@ class Witnesses(WitnessesObject):
             self.active_witnessess = self.steem.rpc.get_active_witnesses()
             self.schedule = self.steem.rpc.get_witness_schedule()
             self.witness_count = self.steem.rpc.get_witness_count()
+        self.current_witness = self.steem.get_dynamic_global_properties(use_stored_data=False)["current_witness"]
         self.identifier = ""
         super(Witnesses, self).__init__(
             [
-                Witness(x, lazy=lazy, full=full, steem_instance=self.steem)
+                Witness(x, lazy=self.lazy, full=self.full, steem_instance=self.steem)
                 for x in self.active_witnessess
             ]
         )
@@ -347,28 +354,37 @@ class WitnessesRankedByVote(WitnessesObject):
         witnessList = []
         last_limit = limit
         self.identifier = ""
+        use_condenser = True
         self.steem.rpc.set_next_node_on_empty_reply(False)
-        if self.steem.rpc.get_use_appbase() and from_account == "":
+        if self.steem.rpc.get_use_appbase() and not use_condenser:
+            query_limit = 1000
+        else:
+            query_limit = 100
+        if self.steem.rpc.get_use_appbase() and not use_condenser and from_account == "":
             last_account = None
+        elif self.steem.rpc.get_use_appbase() and not use_condenser:
+            last_account = Witness(from_account, steem_instance=self.steem)["votes"]
         else:
             last_account = from_account
-        if limit > 100:
-            while last_limit > 100:
-                tmpList = WitnessesRankedByVote(last_account, 100)
+        if limit > query_limit:
+            while last_limit > query_limit:
+                tmpList = WitnessesRankedByVote(last_account, query_limit)
                 if (last_limit < limit):
                     witnessList.extend(tmpList[1:])
-                    last_limit -= 99
+                    last_limit -= query_limit - 1
                 else:
                     witnessList.extend(tmpList)
-                    last_limit -= 100
+                    last_limit -= query_limit
                 if self.steem.rpc.get_use_appbase():
-                    last_account = str(witnessList[-1]["votes"])
+                    last_account = witnessList[-1]["votes"]
                 else:
                     last_account = witnessList[-1]["owner"]
         if (last_limit < limit):
             last_limit += 1
-        if self.steem.rpc.get_use_appbase():
+        if self.steem.rpc.get_use_appbase() and not use_condenser:
             witnessess = self.steem.rpc.list_witnesses({'start': [last_account], 'limit': last_limit, 'order': 'by_vote_name'}, api="database")['witnesses']
+        elif self.steem.rpc.get_use_appbase() and use_condenser:
+            witnessess = self.steem.rpc.get_witnesses_by_vote(last_account, last_limit, api="condenser")
         else:
             witnessess = self.steem.rpc.get_witnesses_by_vote(last_account, last_limit)
         # self.witness_count = len(self.voted_witnessess)

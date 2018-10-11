@@ -28,9 +28,10 @@ class Testcases(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.nodelist = NodeList()
+        cls.nodelist.update_nodes()
         cls.nodelist.update_nodes(steem_instance=Steem(node=cls.nodelist.get_nodes(normal=True, appbase=True), num_retries=10))
-        stm = shared_steem_instance()
-        stm.config.refreshBackup()
+        # stm = shared_steem_instance()
+        # stm.config.refreshBackup()
         runner = CliRunner()
         result = runner.invoke(cli, ['-o', 'set', 'default_vote_weight', '100'])
         if result.exit_code != 0:
@@ -193,9 +194,9 @@ class Testcases(unittest.TestCase):
     def test_powerdown(self):
         runner = CliRunner()
         runner.invoke(cli, ['-o', 'set', 'nodes', str(self.nodelist.get_testnet())])
-        result = runner.invoke(cli, ['powerdown', '1e3'], input="test\n")
+        result = runner.invoke(cli, ['-d', 'powerdown', '1e3'], input="test\n")
         self.assertEqual(result.exit_code, 0)
-        result = runner.invoke(cli, ['powerdown', '0'], input="test\n")
+        result = runner.invoke(cli, ['-d', 'powerdown', '0'], input="test\n")
         self.assertEqual(result.exit_code, 0)
 
     def test_updatememokey(self):
@@ -206,13 +207,14 @@ class Testcases(unittest.TestCase):
 
     def test_permissions(self):
         runner = CliRunner()
-        result = runner.invoke(cli, ['permissions', 'test'])
+        runner.invoke(cli, ['-o', 'set', 'nodes', str(self.nodelist.get_testnet())])
+        result = runner.invoke(cli, ['permissions', 'beem'])
         self.assertEqual(result.exit_code, 0)
 
     def test_follower(self):
         runner = CliRunner()
         runner.invoke(cli, ['-o', 'set', 'nodes', str(self.nodelist.get_testnet())])
-        result = runner.invoke(cli, ['follower', 'beem2'])
+        result = runner.invoke(cli, ['follower', 'beem1'])
         self.assertEqual(result.exit_code, 0)
 
     def test_following(self):
@@ -224,7 +226,7 @@ class Testcases(unittest.TestCase):
     def test_muter(self):
         runner = CliRunner()
         runner.invoke(cli, ['-o', 'set', 'nodes', str(self.nodelist.get_testnet())])
-        result = runner.invoke(cli, ['muter', 'beem2'])
+        result = runner.invoke(cli, ['muter', 'beem1'])
         self.assertEqual(result.exit_code, 0)
 
     def test_muting(self):
@@ -272,13 +274,13 @@ class Testcases(unittest.TestCase):
         runner.invoke(cli, ['-o', 'set', 'nodes', str(self.nodelist.get_testnet())])
         result = runner.invoke(cli, ['-d', 'newaccount', 'beem3'], input="test\ntest\ntest\n")
         self.assertEqual(result.exit_code, 0)
-        result = runner.invoke(cli, ['-d', 'newaccount', '--fee', '6 STEEM', 'beem3'], input="test\ntest\ntest\n")
+        result = runner.invoke(cli, ['-d', 'newaccount', 'beem3'], input="test\ntest\ntest\n")
         self.assertEqual(result.exit_code, 0)
 
     def test_importaccount(self):
         runner = CliRunner()
         runner.invoke(cli, ['-o', 'set', 'nodes', str(self.nodelist.get_testnet())])
-        result = runner.invoke(cli, ['importaccount', '--roles', '["owner", "active", "posting", "memo"]', 'beem2'], input="test\ntest\n")
+        result = runner.invoke(cli, ['importaccount', '--roles', '["owner", "active", "posting", "memo"]', 'beem2'], input="test\numybjvCafrt8LdoCjEimQiQ4\n")
         self.assertEqual(result.exit_code, 0)
         result = runner.invoke(cli, ['delkey', '--confirm', 'STX7mLs2hns87f7kbf3o2HBqNoEaXiTeeU89eVF6iUCrMQJFzBsPo'], input="test\n")
         self.assertEqual(result.exit_code, 0)
@@ -302,24 +304,28 @@ class Testcases(unittest.TestCase):
 
     def test_buy(self):
         runner = CliRunner()
-        result = runner.invoke(cli, ['-d', 'buy', '1', 'STEEM', '2.2'], input="test\n")
+        runner.invoke(cli, ['-o', 'set', 'nodes', self.nodelist.get_nodes()])
+        result = runner.invoke(cli, ['-d', '-x', 'buy', '1', 'STEEM', '2.2'], input="test\n")
         self.assertEqual(result.exit_code, 0)
-        result = runner.invoke(cli, ['-d', 'buy', '1', 'STEEM'], input="y\ntest\n")
+        result = runner.invoke(cli, ['-d', '-x', 'buy', '1', 'STEEM'], input="y\ntest\n")
         self.assertEqual(result.exit_code, 0)
-        result = runner.invoke(cli, ['-d', 'buy', '1', 'SBD', '2.2'], input="test\n")
+        result = runner.invoke(cli, ['-d', '-x', 'buy', '1', 'SBD', '2.2'], input="test\n")
         self.assertEqual(result.exit_code, 0)
-        result = runner.invoke(cli, ['-d', 'buy', '1', 'SBD'], input="y\ntest\n")
+        result = runner.invoke(cli, ['-d', '-x', 'buy', '1', 'SBD'], input="y\ntest\n")
+        runner.invoke(cli, ['-o', 'set', 'nodes', str(self.nodelist.get_testnet())])
         self.assertEqual(result.exit_code, 0)
 
     def test_sell(self):
         runner = CliRunner()
-        result = runner.invoke(cli, ['-d', 'sell', '1', 'STEEM', '2.2'], input="test\n")
+        runner.invoke(cli, ['-o', 'set', 'nodes', self.nodelist.get_nodes()])
+        result = runner.invoke(cli, ['-d', '-x', 'sell', '1', 'STEEM', '2.2'], input="test\n")
         self.assertEqual(result.exit_code, 0)
-        result = runner.invoke(cli, ['-d', 'sell', '1', 'SBD', '2.2'], input="test\n")
+        result = runner.invoke(cli, ['-d', '-x', 'sell', '1', 'SBD', '2.2'], input="test\n")
         self.assertEqual(result.exit_code, 0)
-        result = runner.invoke(cli, ['-d', 'sell', '1', 'STEEM'], input="y\ntest\n")
+        result = runner.invoke(cli, ['-d', '-x', 'sell', '1', 'STEEM'], input="y\ntest\n")
         self.assertEqual(result.exit_code, 0)
-        result = runner.invoke(cli, ['-d', 'sell', '1', 'SBD'], input="y\ntest\n")
+        result = runner.invoke(cli, ['-d', '-x', 'sell', '1', 'SBD'], input="y\ntest\n")
+        runner.invoke(cli, ['-o', 'set', 'nodes', str(self.nodelist.get_testnet())])
         self.assertEqual(result.exit_code, 0)
 
     def test_cancel(self):
@@ -340,17 +346,17 @@ class Testcases(unittest.TestCase):
     def test_follow_unfollow(self):
         runner = CliRunner()
         runner.invoke(cli, ['-o', 'set', 'nodes', str(self.nodelist.get_testnet())])
-        result = runner.invoke(cli, ['follow', 'beem1'], input="test\n")
+        result = runner.invoke(cli, ['-d', 'follow', 'beem1'], input="test\n")
         self.assertEqual(result.exit_code, 0)
-        result = runner.invoke(cli, ['unfollow', 'beem1'], input="test\n")
+        result = runner.invoke(cli, ['-d', 'unfollow', 'beem1'], input="test\n")
         self.assertEqual(result.exit_code, 0)
 
     def test_mute_unmute(self):
         runner = CliRunner()
         runner.invoke(cli, ['-o', 'set', 'nodes', str(self.nodelist.get_testnet())])
-        result = runner.invoke(cli, ['mute', 'beem1'], input="test\n")
+        result = runner.invoke(cli, ['-d', 'mute', 'beem1'], input="test\n")
         self.assertEqual(result.exit_code, 0)
-        result = runner.invoke(cli, ['unfollow', 'beem1'], input="test\n")
+        result = runner.invoke(cli, ['-d', 'unfollow', 'beem1'], input="test\n")
         self.assertEqual(result.exit_code, 0)
 
     def test_witnesscreate(self):
@@ -376,12 +382,17 @@ class Testcases(unittest.TestCase):
     def test_claimreward(self):
         runner = CliRunner()
         result = runner.invoke(cli, ['-d', 'claimreward'], input="test\n")
+        result = runner.invoke(cli, ['-d', 'claimreward', '--claim_all_steem'], input="test\n")
+        result = runner.invoke(cli, ['-d', 'claimreward', '--claim_all_sbd'], input="test\n")
+        result = runner.invoke(cli, ['-d', 'claimreward', '--claim_all_vests'], input="test\n")
         self.assertEqual(result.exit_code, 0)
 
     def test_power(self):
         runner = CliRunner()
+        runner.invoke(cli, ['-o', 'set', 'nodes', self.nodelist.get_nodes()])
         result = runner.invoke(cli, ['power'])
         self.assertEqual(result.exit_code, 0)
+        runner.invoke(cli, ['-o', 'set', 'nodes', str(self.nodelist.get_testnet())])
 
     def test_nextnode(self):
         runner = CliRunner()
@@ -432,34 +443,34 @@ class Testcases(unittest.TestCase):
     def test_pending(self):
         runner = CliRunner()
         runner.invoke(cli, ['-o', 'set', 'nodes', self.nodelist.get_nodes()])
-        result = runner.invoke(cli, ['pending', 'test'])
+        result = runner.invoke(cli, ['pending', 'holger80'])
         self.assertEqual(result.exit_code, 0)
-        result = runner.invoke(cli, ['pending', '--post', '--comment', '--curation', 'test'])
+        result = runner.invoke(cli, ['pending', '--post', '--comment', '--curation', 'holger80'])
         self.assertEqual(result.exit_code, 0)
-        result = runner.invoke(cli, ['pending', '--post', '--comment', '--curation', '--permlink', 'test'])
+        result = runner.invoke(cli, ['pending', '--post', '--comment', '--curation', '--permlink', '--days', '1', 'holger80'])
         self.assertEqual(result.exit_code, 0)
-        result = runner.invoke(cli, ['pending', '--post', '--comment', '--curation', '--author', 'test'])
+        result = runner.invoke(cli, ['pending', '--post', '--comment', '--curation', '--author', '--days', '1', 'holger80'])
         self.assertEqual(result.exit_code, 0)
-        result = runner.invoke(cli, ['pending', '--post', '--comment', '--curation', '--author', '--title', 'test'])
+        result = runner.invoke(cli, ['pending', '--post', '--comment', '--curation', '--author', '--title', '--days', '1', 'holger80'])
         self.assertEqual(result.exit_code, 0)
-        result = runner.invoke(cli, ['pending', '--post', '--comment', '--curation', '--author', '--permlink', '--length', '30', 'test'])
+        result = runner.invoke(cli, ['pending', '--post', '--comment', '--curation', '--author', '--permlink', '--length', '30', '--days', '1', 'holger80'])
         self.assertEqual(result.exit_code, 0)
         runner.invoke(cli, ['-o', 'set', 'nodes', str(self.nodelist.get_testnet())])
 
     def test_rewards(self):
         runner = CliRunner()
         runner.invoke(cli, ['-o', 'set', 'nodes', self.nodelist.get_nodes()])
-        result = runner.invoke(cli, ['rewards', 'test'])
+        result = runner.invoke(cli, ['rewards', 'holger80'])
         self.assertEqual(result.exit_code, 0)
-        result = runner.invoke(cli, ['rewards', '--post', '--comment', '--curation', 'test'])
+        result = runner.invoke(cli, ['rewards', '--post', '--comment', '--curation', 'holger80'])
         self.assertEqual(result.exit_code, 0)
-        result = runner.invoke(cli, ['rewards', '--post', '--comment', '--curation', '--permlink', 'test'])
+        result = runner.invoke(cli, ['rewards', '--post', '--comment', '--curation', '--permlink', 'holger80'])
         self.assertEqual(result.exit_code, 0)
-        result = runner.invoke(cli, ['rewards', '--post', '--comment', '--curation', '--author', 'test'])
+        result = runner.invoke(cli, ['rewards', '--post', '--comment', '--curation', '--author', 'holger80'])
         self.assertEqual(result.exit_code, 0)
-        result = runner.invoke(cli, ['rewards', '--post', '--comment', '--curation', '--author', '--title', 'test'])
+        result = runner.invoke(cli, ['rewards', '--post', '--comment', '--curation', '--author', '--title', 'holger80'])
         self.assertEqual(result.exit_code, 0)
-        result = runner.invoke(cli, ['rewards', '--post', '--comment', '--curation', '--author', '--permlink', '--length', '30', 'test'])
+        result = runner.invoke(cli, ['rewards', '--post', '--comment', '--curation', '--author', '--permlink', '--length', '30', 'holger80'])
         self.assertEqual(result.exit_code, 0)
         runner.invoke(cli, ['-o', 'set', 'nodes', str(self.nodelist.get_testnet())])
 
@@ -472,8 +483,13 @@ class Testcases(unittest.TestCase):
 
     def test_verify(self):
         runner = CliRunner()
-        runner.invoke(cli, ['-o', 'set', 'nodes', self.nodelist.get_nodes()])
+        runner.invoke(cli, ['-o', 'set', 'nodes', self.nodelist.get_nodes(normal=False, appbase=True)])
+        result = runner.invoke(cli, ['verify', '--trx', '3', '25304468'])
+        self.assertEqual(result.exit_code, 0)
+        result = runner.invoke(cli, ['verify', '--trx', '5', '25304468'])
+        self.assertEqual(result.exit_code, 0)
         result = runner.invoke(cli, ['verify', '--trx', '0'])
+        self.assertEqual(result.exit_code, 0)
         runner.invoke(cli, ['-o', 'set', 'nodes', str(self.nodelist.get_testnet())])
         self.assertEqual(result.exit_code, 0)
 

@@ -14,12 +14,12 @@ from .instance import shared_steem_instance
 from .account import Account
 from .amount import Amount
 from .price import Price
-from .utils import resolve_authorperm, construct_authorperm, derive_permlink, remove_from_dict, make_patch, formatTimeString
+from .utils import resolve_authorperm, construct_authorperm, derive_permlink, remove_from_dict, make_patch, formatTimeString, formatToTimeStamp
 from .blockchainobject import BlockchainObject
 from .exceptions import ContentDoesNotExistsException, VotingInvalidOnArchivedPost
 from beembase import operations
 from beemgraphenebase.py23 import py23_bytes, bytes_types, integer_types, string_types, text_type
-from beem.constants import STEEM_REVERSE_AUCTION_WINDOW_SECONDS, STEEM_100_PERCENT, STEEM_1_PERCENT
+from beem.constants import STEEM_REVERSE_AUCTION_WINDOW_SECONDS_HF6, STEEM_REVERSE_AUCTION_WINDOW_SECONDS_HF20, STEEM_100_PERCENT, STEEM_1_PERCENT
 log = logging.getLogger(__name__)
 
 
@@ -90,7 +90,7 @@ class Comment(BlockchainObject):
         ]
         for p in sbd_amounts:
             if p in comment and isinstance(comment.get(p), (string_types, list, dict)):
-                comment[p] = Amount(comment.get(p, "0.000 SBD"), steem_instance=self.steem)
+                comment[p] = Amount(comment.get(p, "0.000 %s" % (self.steem.sbd_symbol)), steem_instance=self.steem)
 
         # turn json_metadata into python dict
         meta_str = comment.get("json_metadata", "{}")
@@ -238,6 +238,10 @@ class Comment(BlockchainObject):
         return self["parent_permlink"]
 
     @property
+    def depth(self):
+        return self["depth"]
+
+    @property
     def title(self):
         if "title" in self:
             return self["title"]
@@ -259,12 +263,12 @@ class Comment(BlockchainObject):
             return {}
 
     def is_main_post(self):
-        """ Retuns True if main post, and False if this is a comment (reply).
+        """ Returns True if main post, and False if this is a comment (reply).
         """
         return self['depth'] == 0
 
     def is_comment(self):
-        """ Retuns True if post is a comment
+        """ Returns True if post is a comment
         """
         return self['depth'] > 0
 
@@ -272,7 +276,7 @@ class Comment(BlockchainObject):
     def reward(self):
         """ Return the estimated total SBD reward.
         """
-        a_zero = Amount("0 SBD", steem_instance=self.steem)
+        a_zero = Amount(0, self.steem.sbd_symbol, steem_instance=self.steem)
         total = Amount(self.get("total_payout_value", a_zero), steem_instance=self.steem)
         pending = Amount(self.get("pending_payout_value", a_zero), steem_instance=self.steem)
         return total + pending
@@ -281,7 +285,7 @@ class Comment(BlockchainObject):
         """ Return if the payout is pending (the post/comment
             is younger than 7 days)
         """
-        a_zero = Amount("0 SBD", steem_instance=self.steem)
+        a_zero = Amount(0, self.steem.sbd_symbol, steem_instance=self.steem)
         total = Amount(self.get("total_payout_value", a_zero), steem_instance=self.steem)
         post_age_days = self.time_elapsed().total_seconds() / 60 / 60 / 24
         return post_age_days < 7.0 and float(total) == 0
@@ -293,11 +297,15 @@ class Comment(BlockchainObject):
         return utc.localize(datetime.utcnow()) - self['created']
 
     def curation_penalty_compensation_SBD(self):
-        """ Returns The required post payout amount after 30 minutes
-            which will compentsate the curation penalty, if voting earlier than 30 minutes
+        """ Returns The required post payout amount after 15 minutes
+            which will compentsate the curation penalty, if voting earlier than 15 minutes
         """
         self.refresh()
-        return self.reward * 900. / ((self.time_elapsed()).total_seconds() / 60) ** 2
+        if self.steem.hardfork >= 20:
+            reverse_auction_window_seconds = STEEM_REVERSE_AUCTION_WINDOW_SECONDS_HF20
+        else:
+            reverse_auction_window_seconds = STEEM_REVERSE_AUCTION_WINDOW_SECONDS_HF6
+        return self.reward * reverse_auction_window_seconds / ((self.time_elapsed()).total_seconds() / 60) ** 2
 
     def estimate_curation_SBD(self, vote_value_SBD, estimated_value_SBD=None):
         """ Estimates curation reward
@@ -334,7 +342,10 @@ class Comment(BlockchainObject):
             elapsed_seconds = (vote_time - self["created"]).total_seconds()
         else:
             raise ValueError("vote_time must be a string or a datetime")
-        reward = (elapsed_seconds / STEEM_REVERSE_AUCTION_WINDOW_SECONDS)
+        if self.steem.hardfork >= 20:
+            reward = (elapsed_seconds / STEEM_REVERSE_AUCTION_WINDOW_SECONDS_HF20)
+        else:
+            reward = (elapsed_seconds / STEEM_REVERSE_AUCTION_WINDOW_SECONDS_HF6)
         if reward > 1:
             reward = 1.0
         return 1.0 - reward
@@ -414,7 +425,10 @@ class Comment(BlockchainObject):
             total_payout = Amount(self["total_payout_value"], steem_instance=self.steem)
             curator_payout = Amount(self["curator_payout_value"], steem_instance=self.steem)
             author_payout = total_payout - curator_payout
-            return {'pending_rewards': False, "payout_SP": Amount("0 SBD", steem_instance=self.steem), "payout_SBD": Amount("0 SBD", steem_instance=self.steem), "total_payout_SBD": author_payout}
+            return {'pending_rewards': False,
+                    "payout_SP": Amount(0, self.steem.steem_symbol, steem_instance=self.steem),
+                    "payout_SBD": Amount(0, self.steem.sbd_symbol, steem_instance=self.steem),
+                    "total_payout_SBD": author_payout}
 
         median_price = Price(self.steem.get_current_median_history(), steem_instance=self.steem)
         beneficiaries_pct = self.get_beneficiaries_pct()
@@ -427,7 +441,7 @@ class Comment(BlockchainObject):
         author_tokens -= benefactor_tokens
 
         sbd_steem = author_tokens * self["percent_steem_dollars"] / 20000.
-        vesting_steem = median_price.as_base("STEEM") * (author_tokens - sbd_steem)
+        vesting_steem = median_price.as_base(self.steem.steem_symbol) * (author_tokens - sbd_steem)
 
         return {'pending_rewards': True, "payout_SP": vesting_steem, "payout_SBD": sbd_steem, "total_payout_SBD": author_tokens}
 
@@ -463,32 +477,32 @@ class Comment(BlockchainObject):
         pending_rewards = False
         total_vote_weight = self["total_vote_weight"]
         if not self["allow_curation_rewards"]:
-            max_rewards = Amount("0 STEEM", steem_instance=self.steem)
+            max_rewards = Amount(0, self.steem.steem_symbol, steem_instance=self.steem)
             unclaimed_rewards = max_rewards.copy()
         elif not self.is_pending():
             max_rewards = Amount(self["curator_payout_value"], steem_instance=self.steem)
             unclaimed_rewards = Amount(self["total_payout_value"], steem_instance=self.steem) * 0.25 - max_rewards
             total_vote_weight = 0
             for vote in self["active_votes"]:
-                total_vote_weight += vote["weight"]
+                total_vote_weight += int(vote["weight"])
         else:
             if pending_payout_value is None:
                 pending_payout_value = Amount(self["pending_payout_value"], steem_instance=self.steem)
             elif isinstance(pending_payout_value, (float, integer_types)):
-                pending_payout_value = Amount(pending_payout_value, "SBD", steem_instance=self.steem)
+                pending_payout_value = Amount(pending_payout_value, self.steem.sbd_symbol, steem_instance=self.steem)
             elif isinstance(pending_payout_value, str):
                 pending_payout_value = Amount(pending_payout_value, steem_instance=self.steem)
             if pending_payout_SBD:
                 max_rewards = (pending_payout_value * 0.25)
             else:
-                max_rewards = median_price.as_base("STEEM") * (pending_payout_value * 0.25)
+                max_rewards = median_price.as_base(self.steem.steem_symbol) * (pending_payout_value * 0.25)
             unclaimed_rewards = max_rewards.copy()
             pending_rewards = True
 
         active_votes = {}
         for vote in self["active_votes"]:
             if total_vote_weight > 0:
-                claim = max_rewards * vote["weight"] / total_vote_weight
+                claim = max_rewards * int(vote["weight"]) / total_vote_weight
             else:
                 claim = 0
             if claim > 0 and pending_rewards:
@@ -516,7 +530,7 @@ class Comment(BlockchainObject):
             return self.steem.rpc.get_reblogged_by(post_author, post_permlink, api="follow")
 
     def get_replies(self, raw_data=False, identifier=None):
-        """ Returns all content replies
+        """ Returns content replies
 
             :param bool raw_data: When set to False, the replies will be returned as Comment class objects
         """
@@ -536,6 +550,28 @@ class Comment(BlockchainObject):
             return content_replies
         return [Comment(c, steem_instance=self.steem) for c in content_replies]
 
+    def get_all_replies(self, parent=None):
+        """ Returns all content replies
+        """
+        if parent is None:
+            parent = self
+        if parent["children"] > 0:
+            children = parent.get_replies()
+            if children is None:
+                return []
+            for cc in children[:]:
+                children.extend(self.get_all_replies(parent=cc))
+            return children
+        return []
+
+    def get_parent(self, children=None):
+        """ Returns the parent post width depth == 0"""
+        if children is None:
+            children = self
+        while children["depth"] > 0:
+            children = Comment(construct_authorperm(children["parent_author"], children["parent_permlink"]), steem_instance=self.steem)
+        return children
+
     def get_votes(self, raw_data=False):
         """Returns all votes as ActiveVotes object"""
         if raw_data:
@@ -551,8 +587,10 @@ class Comment(BlockchainObject):
             :param str voter: (optional) Voting account
 
         """
-        if self.get('net_rshares', None) is None:
-            raise VotingInvalidOnArchivedPost
+        last_payout = self.get('last_payout', None)
+        if last_payout is not None:
+            if formatToTimeStamp(last_payout) > 0:
+                raise VotingInvalidOnArchivedPost
         return self.vote(weight, account=voter)
 
     def downvote(self, weight=-100, voter=None):
@@ -563,8 +601,10 @@ class Comment(BlockchainObject):
             :param str voter: (optional) Voting account
 
         """
-        if self.get('net_rshares', None) is None:
-            raise VotingInvalidOnArchivedPost
+        last_payout = self.get('last_payout', None)
+        if last_payout is not None:
+            if formatToTimeStamp(last_payout) > 0:
+                raise VotingInvalidOnArchivedPost
         return self.vote(weight, account=voter)
 
     def vote(self, weight, account=None, identifier=None, **kwargs):
@@ -590,7 +630,7 @@ class Comment(BlockchainObject):
         else:
             [post_author, post_permlink] = resolve_authorperm(identifier)
 
-        vote_weight = int(weight * STEEM_1_PERCENT)
+        vote_weight = int(float(weight) * STEEM_1_PERCENT)
         if vote_weight > STEEM_100_PERCENT:
             vote_weight = STEEM_100_PERCENT
         if vote_weight < -STEEM_100_PERCENT:

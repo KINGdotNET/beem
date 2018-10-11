@@ -9,6 +9,7 @@ from beemgraphenebase.py23 import bytes_types, integer_types, string_types, text
 from beem.instance import shared_steem_instance
 from datetime import datetime, timedelta
 import json
+import threading
 
 
 @python_2_unicode_compatible
@@ -18,53 +19,72 @@ class ObjectCache(dict):
         super(ObjectCache, self).__init__(initial_data)
         self.default_expiration = default_expiration
         self.auto_clean = auto_clean
+        self.lock = threading.RLock()
 
     def __setitem__(self, key, value):
-        if key in self:
-            del self[key]
         data = {
             "expires": datetime.utcnow() + timedelta(
                 seconds=self.default_expiration),
             "data": value
         }
-        dict.__setitem__(self, key, data)
+        with self.lock:
+            if key in self:
+                del self[key]
+            dict.__setitem__(self, key, data)
         if self.auto_clean:
             self.clear_expired_items()
 
     def __getitem__(self, key):
-        if key in self:
-            value = dict.__getitem__(self, key)
-            return value["data"]
+        with self.lock:
+            if key in self:
+                value = dict.__getitem__(self, key)
+                if value is not None:
+                    return value["data"]
 
     def get(self, key, default):
-        if key in self:
-            return self[key]
-        else:
-            return default
+        with self.lock:
+            if key in self:
+                if self[key] is not None:
+                    return self[key]
+                else:
+                    return default
+            else:
+                return default
 
     def clear_expired_items(self):
-        keys = []
-        for key in self.keys():
-            keys.append(key)
-        for key in keys:
-            value = dict.__getitem__(self, key)
-            if datetime.utcnow() >= value["expires"]:
+        with self.lock:
+            del_list = []
+            utc_now = datetime.utcnow()
+            for key in self:
+                value = dict.__getitem__(self, key)
+                if value is None:
+                    del_list.append(key)
+                    continue
+                if utc_now >= value["expires"]:
+                    del_list.append(key)
+            for key in del_list:
                 del self[key]
 
     def __contains__(self, key):
-        if dict.__contains__(self, key):
-            value = dict.__getitem__(self, key)
-            if datetime.utcnow() < value["expires"]:
-                return True
-            else:
-                value["data"] = None
-        return False
+        with self.lock:
+            if dict.__contains__(self, key):
+                value = dict.__getitem__(self, key)
+                if value is None:
+                    return False
+                if datetime.utcnow() < value["expires"]:
+                    return True
+                else:
+                    value["data"] = None
+            return False
 
     def __str__(self):
         if self.auto_clean:
             self.clear_expired_items()
+        n = 0
+        with self.lock:
+            n = len(list(self.keys()))
         return "ObjectCache(n={}, default_expiration={})".format(
-            len(list(self.keys())), self.default_expiration)
+            n, self.default_expiration)
 
 
 class BlockchainObject(dict):
@@ -108,7 +128,7 @@ class BlockchainObject(dict):
             self.identifier = data.get(self.id_item)
             super(BlockchainObject, self).__init__(data)
         elif isinstance(data, integer_types):
-            # This is only for block number bascially
+            # This is only for block number basically
             self.identifier = data
             if not lazy and not self.cached:
                 self.refresh()

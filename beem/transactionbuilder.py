@@ -54,6 +54,7 @@ class TransactionBuilder(dict):
     def __init__(
         self,
         tx={},
+        use_condenser_api=True,
         steem_instance=None,
         **kwargs
     ):
@@ -66,6 +67,7 @@ class TransactionBuilder(dict):
             self._require_reconstruction = False
         else:
             self._require_reconstruction = True
+        self._use_condenser_api = use_condenser_api
         self.set_expiration(kwargs.get("expiration", self.steem.expiration))
 
     def set_expiration(self, p):
@@ -80,10 +82,10 @@ class TransactionBuilder(dict):
         """List all ops"""
         if self.steem.is_connected() and self.steem.rpc.get_use_appbase():
             # appbase disabled by now
-            appbase = False
+            appbase = not self._use_condenser_api
         else:
             appbase = False
-        return [Operation(o, appbase=appbase) for o in self.ops]
+        return [Operation(o, appbase=appbase, prefix=self.steem.prefix) for o in self.ops]
 
     def _is_signed(self):
         """Check if signatures exists"""
@@ -118,12 +120,15 @@ class TransactionBuilder(dict):
         """
         return self
 
-    def json(self):
+    def json(self, with_prefix=False):
         """ Show the transaction as plain json
         """
         if not self._is_constructed() or self._is_require_reconstruction():
             self.constructTx()
-        return dict(self)
+        json_dict = dict(self)
+        if with_prefix:
+            json_dict["prefix"] = self.steem.prefix
+        return json_dict
 
     def appendOps(self, ops, append_to=None):
         """ Append op(s) to the transaction builder
@@ -229,7 +234,7 @@ class TransactionBuilder(dict):
         """Clear all stored wifs"""
         self.wifs = set()
 
-    def constructTx(self):
+    def constructTx(self, ref_block_num=None, ref_block_prefix=None):
         """ Construct the actual transaction and store it in the class's dict
             store
 
@@ -238,24 +243,27 @@ class TransactionBuilder(dict):
         if self.steem.is_connected() and self.steem.rpc.get_use_appbase():
             # appbase disabled by now
             # broadcasting does not work at the moment
-            appbase = False
+            appbase = not self._use_condenser_api
         else:
             appbase = False
         for op in self.ops:
             # otherwise, we simply wrap ops into Operations
-            ops.extend([Operation(op, appbase=appbase)])
+            ops.extend([Operation(op, appbase=appbase, prefix=self.steem.prefix)])
 
         # We no wrap everything into an actual transaction
         expiration = formatTimeFromNow(
             self.expiration or self.steem.expiration
         )
-        ref_block_num, ref_block_prefix = transactions.getBlockParams(
-            self.steem.rpc)
+        if ref_block_num is None or ref_block_prefix is None:
+            ref_block_num, ref_block_prefix = transactions.getBlockParams(
+                self.steem.rpc)
         self.tx = Signed_Transaction(
             ref_block_prefix=ref_block_prefix,
             expiration=expiration,
             operations=ops,
-            ref_block_num=ref_block_num
+            ref_block_num=ref_block_num,
+            custom_chains=self.steem.custom_chains,
+            prefix=self.steem.prefix
         )
 
         super(TransactionBuilder, self).update(self.tx.json())
@@ -289,7 +297,8 @@ class TransactionBuilder(dict):
             operations.default_prefix = self["blockchain"]["prefix"]
 
         try:
-            signedtx = Signed_Transaction(**self.json())
+            signedtx = Signed_Transaction(**self.json(with_prefix=True))
+            signedtx.add_custom_chains(self.steem.custom_chains)
         except:
             raise ValueError("Invalid TransactionBuilder Format")
 
@@ -366,7 +375,7 @@ class TransactionBuilder(dict):
             Returns the signed transaction and clears itself
             after broadast
 
-            Clears itself when broadcast was not sucessfully.
+            Clears itself when broadcast was not successfully.
 
             :param int max_block_age: paramerter only used
                 for appbase ready nodes
@@ -381,9 +390,12 @@ class TransactionBuilder(dict):
         ret = self.json()
         if self.steem.is_connected() and self.steem.rpc.get_use_appbase():
             # Returns an internal Error at the moment
-            # args = {'trx': self.json(), 'max_block_age': max_block_age}
-            args = self.json()
-            broadcast_api = "condenser"
+            if not self._use_condenser_api:
+                args = {'trx': self.json(), 'max_block_age': max_block_age}
+                broadcast_api = "network_broadcast"
+            else:
+                args = self.json()
+                broadcast_api = "condenser"
         else:
             args = self.json()
             broadcast_api = "network_broadcast"
@@ -400,7 +412,8 @@ class TransactionBuilder(dict):
             elif self.steem.blocking:
                 ret = self.steem.rpc.broadcast_transaction_synchronous(
                     args, api=broadcast_api)
-                ret.update(**ret.get("trx"))
+                if "trx" in ret:
+                    ret.update(**ret.get("trx"))
             else:
                 self.steem.rpc.broadcast_transaction(
                     args, api=broadcast_api)

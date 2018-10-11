@@ -26,8 +26,8 @@ ops = [
     'comment_options',
     'set_withdraw_vesting_route',
     'limit_order_create2',
-    'challenge_authority',
-    'prove_authority',
+    'claim_account',
+    'create_claimed_account',
     'request_account_recovery',
     'recover_account',
     'change_recovery_account',
@@ -46,6 +46,7 @@ ops = [
     'claim_reward_balance',
     'delegate_vesting_shares',
     'account_create_with_delegation',
+    'witness_set_properties',
     'fill_convert_request',
     'author_reward',
     'curation_reward',
@@ -63,6 +64,36 @@ ops = [
     'comment_benefactor_reward',
 ]
 operations = {o: ops.index(o) for o in ops}
+
+ops_wls = [
+    'vote',
+    'comment',
+    'transfer',
+    'transfer_to_vesting',
+    'withdraw_vesting',
+    'account_create',
+    'account_update',
+    'account_forsale',
+    'account_buying',
+    'witness_update',
+    'account_witness_vote',
+    'account_witness_proxy',
+    'custom',
+    'delete_comment',
+    'custom_json',
+    'comment_options',
+    'set_withdraw_vesting_route',
+    'custom_binary',
+    'claim_reward_balance',
+    'author_reward',
+    'curation_reward',
+    'comment_reward',
+    'shutdown_witness',
+    'hardfork',
+    'comment_payout_update',
+    'comment_benefactor_reward',
+]
+operations_wls = {o: ops_wls.index(o) for o in ops_wls}
 
 
 def getOperationNameForId(i):

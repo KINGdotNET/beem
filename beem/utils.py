@@ -28,21 +28,34 @@ def formatTime(t):
         return t.strftime("%Y%m%dt%H%M%S%Z")
 
 
-def formatTimeString(t):
-    """ Properly Format Time for permlinks
-    """
-    if isinstance(t, (datetime, date, time)):
-        return t.strftime(timeFormat)
-    utc = pytz.timezone('UTC')
-    return utc.localize(datetime.strptime(t, timeFormat))
-
-
 def addTzInfo(t, timezone='UTC'):
     """Returns a datetime object with tzinfo added"""
     if t and isinstance(t, (datetime, date, time)) and t.tzinfo is None:
         utc = pytz.timezone(timezone)
         t = utc.localize(t)
     return t
+
+
+def formatTimeString(t):
+    """ Properly Format Time for permlinks
+    """
+    if isinstance(t, (datetime, date, time)):
+        return t.strftime(timeFormat)
+    return addTzInfo(datetime.strptime(t, timeFormat))
+
+
+def formatToTimeStamp(t):
+    """ Returns a timestamp integer
+
+        :param datetime t: datetime object
+        :return: Timestamp as integer
+    """
+    if isinstance(t, (datetime, date, time)):
+        t = addTzInfo(t)
+    else:
+        t = formatTimeString(t)
+    epoch = addTzInfo(datetime(1970, 1, 1))
+    return int((t - epoch).total_seconds())
 
 
 def formatTimeFromNow(secs=0):
@@ -120,10 +133,27 @@ def resolve_authorperm(identifier):
 
     Splits the string into author and permlink with the
     following separator: ``/``.
+
+    Examples:
+
+        .. code-block:: python
+
+            >>> from beem.utils import resolve_authorperm
+            >>> author, permlink = resolve_authorperm('https://d.tube/#!/v/pottlund/m5cqkd1a')
+            >>> author, permlink = resolve_authorperm("https://steemit.com/witness-category/@gtg/24lfrm-gtg-witness-log")
+            >>> author, permlink = resolve_authorperm("@gtg/24lfrm-gtg-witness-log")
+            >>> author, permlink = resolve_authorperm("https://busy.org/@gtg/24lfrm-gtg-witness-log")
+
     """
+    # without any http(s)
     match = re.match("@?([\w\-\.]*)/([\w\-]*)", identifier)
     if hasattr(match, "group"):
         return match.group(1), match.group(2)
+    # dtube url
+    match = re.match("([\w\-\.]+[^#?\s]+)/#!/v/?([\w\-\.]*)/([\w\-]*)", identifier)
+    if hasattr(match, "group"):
+        return match.group(2), match.group(3)
+    # url
     match = re.match("([\w\-\.]+[^#?\s]+)/@?([\w\-\.]*)/([\w\-]*)", identifier)
     if not hasattr(match, "group"):
         raise ValueError("Invalid identifier")
@@ -233,6 +263,8 @@ def remove_from_dict(obj, keys=list(), keep_keys=True):
         Prune a class or dictionary of specified keys.(keep_keys=False).
     """
     if type(obj) == dict:
+        items = list(obj.items())
+    elif isinstance(obj, dict):
         items = list(obj.items())
     else:
         items = list(obj.__dict__.items())

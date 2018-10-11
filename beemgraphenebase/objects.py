@@ -15,7 +15,6 @@ from beemgraphenebase.types import (
     Map, Id, JsonObj
 )
 from .py23 import py23_bytes, bytes_types, integer_types, string_types
-from .chains import known_chains
 from .objecttypes import object_type
 from .operationids import operations
 
@@ -65,8 +64,8 @@ class Operation(object):
     def getOperationNameForId(self, i):
         """ Convert an operation id into the corresponding string
         """
-        for key in operations:
-            if int(operations[key]) is int(i):
+        for key in self.operations():
+            if int(self.operations()[key]) is int(i):
                 return key
         return "Unknown Operation ID %d" % i
 

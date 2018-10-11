@@ -255,7 +255,7 @@ class Blockchain(object):
             raise OfflineHasNoRPCException("No RPC available in offline mode!")
         self.steem.rpc.set_next_node_on_empty_reply(False)
         if self.steem.rpc.get_use_appbase():
-            ret = self.steem.rpc.get_transaction({'id': transaction_id}, api="database")
+            ret = self.steem.rpc.get_transaction({'id': transaction_id}, api="account_history")
         else:
             ret = self.steem.rpc.get_transaction(transaction_id, api="database")
         return ret
@@ -269,7 +269,7 @@ class Blockchain(object):
             raise OfflineHasNoRPCException("No RPC available in offline mode!")
         self.steem.rpc.set_next_node_on_empty_reply(False)
         if self.steem.rpc.get_use_appbase():
-            ret = self.steem.rpc.get_transaction({'trx': transaction}, api="database")["hex"]
+            ret = self.steem.rpc.get_transaction_hex({'trx': transaction}, api="database")["hex"]
         else:
             ret = self.steem.rpc.get_transaction_hex(transaction, api="database")
         return ret
@@ -405,17 +405,14 @@ class Blockchain(object):
                                                 num_retries_call=self.steem.rpc.num_retries_call,
                                                 timeout=self.steem.rpc.timeout))
         # We are going to loop indefinitely
+        latest_block = 0
         while True:
-
-            # Get chain properies to identify the
             if stop:
                 head_block = stop
             else:
                 current_block_num = self.get_current_block_num()
                 head_block = current_block_num
             if threading and not head_block_reached:
-                # disable autoclean
-                auto_clean = current_block.get_cache_auto_clean()
                 latest_block = start - 1
                 result_block_nums = []
                 for blocknum in range(start, head_block + 1, thread_num):
@@ -424,8 +421,7 @@ class Blockchain(object):
                     if FUTURES_MODULE is not None:
                         futures = []
                     block_num_list = []
-                    current_block.set_cache_auto_clean(False)
-                    freeze = self.steem.rpc.nodes.freeze_current_node
+                    # freeze = self.steem.rpc.nodes.freeze_current_node
                     num_retries = self.steem.rpc.nodes.num_retries
                     # self.steem.rpc.nodes.freeze_current_node = True
                     self.steem.rpc.nodes.num_retries = thread_num
@@ -449,10 +445,8 @@ class Blockchain(object):
                         for result in pool.results():
                             results.append(result)
                         pool.abort()
-                    current_block.clear_cache_from_expired_items()
-                    current_block.set_cache_auto_clean(auto_clean)
                     self.steem.rpc.nodes.num_retries = num_retries
-                    self.steem.rpc.nodes.freeze_current_node = freeze
+                    # self.steem.rpc.nodes.freeze_current_node = freeze
                     new_error_cnt = self.steem.rpc.nodes.node.error_cnt
                     self.steem.rpc.nodes.node.error_cnt = error_cnt
                     if new_error_cnt > error_cnt:
@@ -461,12 +455,11 @@ class Blockchain(object):
 
                     checked_results = []
                     for b in results:
-                        if len(b.operations) > 0:
-                            if b.block_num is not None and int(b.block_num) not in result_block_nums:
-                                b["id"] = b.block_num
-                                b.identifier = b.block_num
-                                checked_results.append(b)
-                                result_block_nums.append(int(b.block_num))
+                        if b.block_num is not None and int(b.block_num) not in result_block_nums:
+                            b["id"] = b.block_num
+                            b.identifier = b.block_num
+                            checked_results.append(b)
+                            result_block_nums.append(int(b.block_num))
 
                     missing_block_num = list(set(block_num_list).difference(set(result_block_nums)))
                     while len(missing_block_num) > 0:
@@ -491,7 +484,6 @@ class Blockchain(object):
                             block = Block(blocknum, only_ops=only_ops, only_virtual_ops=only_virtual_ops, steem_instance=self.steem)
                             result_block_nums.append(blocknum)
                             yield block
-                current_block.set_cache_auto_clean(auto_clean)
             elif max_batch_size is not None and (head_block - start) >= max_batch_size and not head_block_reached:
                 if not self.steem.is_connected():
                     raise OfflineHasNoRPCException("No RPC available in offline mode!")
@@ -535,32 +527,35 @@ class Blockchain(object):
                         if not isinstance(block_batch, list):
                             block_batch = [block_batch]
                         for block in block_batch:
+                            if not bool(block):
+                                continue
                             if self.steem.rpc.get_use_appbase():
                                 if only_virtual_ops:
                                     block = block["ops"]
                                 else:
                                     block = block["block"]
-                            block["id"] = blocknum
-                            yield Block(block, only_ops=only_ops, only_virtual_ops=only_virtual_ops, steem_instance=self.steem)
-                            blocknum += 1
+                            block = Block(block, only_ops=only_ops, only_virtual_ops=only_virtual_ops, steem_instance=self.steem)
+                            block["id"] = block.block_num
+                            block.identifier = block.block_num
+                            yield block
+                            blocknum = block.block_num
             else:
                 # Blocks from start until head block
                 for blocknum in range(start, head_block + 1):
                     # Get full block
-                    block = self.wait_for_and_get_block(blocknum, only_ops=only_ops, only_virtual_ops=only_virtual_ops)
+                    block = self.wait_for_and_get_block(blocknum, only_ops=only_ops, only_virtual_ops=only_virtual_ops, block_number_check_cnt=5, last_current_block_num=current_block_num)
                     yield block
             # Set new start
             start = head_block + 1
             head_block_reached = True
 
             if stop and start > stop:
-                # raise StopIteration
                 return
 
             # Sleep for one block
             time.sleep(self.block_interval)
 
-    def wait_for_and_get_block(self, block_number, blocks_waiting_for=None, only_ops=False, only_virtual_ops=False):
+    def wait_for_and_get_block(self, block_number, blocks_waiting_for=None, only_ops=False, only_virtual_ops=False, block_number_check_cnt=-1, last_current_block_num=None):
         """ Get the desired block from the chain, if the current head block is smaller (for both head and irreversible)
             then we wait, but a maxmimum of blocks_waiting_for * max_block_wait_repetition time before failure.
 
@@ -569,25 +564,36 @@ class Blockchain(object):
                 how many blocks we are willing to wait, positive int (default: None)
             :param bool only_ops: Returns blocks with operations only, when set to True (default: False)
             :param bool only_virtual_ops: Includes only virtual operations (default: False)
+            :param int block_number_check_cnt: limit the number of retries when greater than -1
+            :param int last_current_block_num: can be used to reduce the number of get_current_block_num() api calls
 
         """
+        if last_current_block_num is None:
+            last_current_block_num = self.get_current_block_num()
+        elif last_current_block_num - block_number < 50:
+            last_current_block_num = self.get_current_block_num()
+
         if not blocks_waiting_for:
             blocks_waiting_for = max(
-                1, block_number - self.get_current_block_num())
+                1, block_number - last_current_block_num)
 
             repetition = 0
             # can't return the block before the chain has reached it (support future block_num)
-            while self.get_current_block_num() < block_number:
+            while last_current_block_num < block_number:
                 repetition += 1
                 time.sleep(self.block_interval)
+                if last_current_block_num - block_number < 50:
+                    last_current_block_num = self.get_current_block_num()
                 if repetition > blocks_waiting_for * self.max_block_wait_repetition:
                     raise BlockWaitTimeExceeded("Already waited %d s" % (blocks_waiting_for * self.max_block_wait_repetition * self.block_interval))
         # block has to be returned properly
         repetition = 0
+        cnt = 0
         block = None
-        while not block:
+        while (block is None or block.block_num is None or int(block.block_num) != block_number) and (block_number_check_cnt < 0 or cnt < block_number_check_cnt):
             try:
                 block = Block(block_number, only_ops=only_ops, only_virtual_ops=only_virtual_ops, steem_instance=self.steem)
+                cnt += 1
             except BlockDoesNotExistsException:
                 block = None
                 if repetition > blocks_waiting_for * self.max_block_wait_repetition:
@@ -611,7 +617,7 @@ class Blockchain(object):
             :param dict add_to_ops_stat: if set, the result is added to add_to_ops_stat
             :param bool verbose: if True, the current block number and timestamp is printed
 
-            This call returns a dict with all possible operations and their occurence.
+            This call returns a dict with all possible operations and their occurrence.
 
         """
         if add_to_ops_stat is None:
@@ -655,7 +661,7 @@ class Blockchain(object):
             The dict output is formated such that ``type`` carries the
             operation type. Timestamp and block_num are taken from the
             block the operation was stored in and the other keys depend
-            on the actualy operation.
+            on the actual operation.
 
             .. note:: If you want instant confirmation, you need to instantiate
                       class:`beem.blockchain.Blockchain` with
@@ -663,6 +669,7 @@ class Blockchain(object):
                       confirmed in an irreversible block.
 
             output when `raw_ops=False` is set:
+
             .. code-block:: js
 
                 {
@@ -673,10 +680,11 @@ class Blockchain(object):
                     'memo': 'https://steemit.com/lofi/@johngreenfield/lofi-joji-yeah-right',
                     '_id': '6d4c5f2d4d8ef1918acaee4a8dce34f9da384786',
                     'timestamp': datetime.datetime(2018, 5, 9, 11, 23, 6, tzinfo=<UTC>),
-                    'block_num': 22277588, 'trx_id': 'cf11b2ac8493c71063ec121b2e8517ab1e0e6bea'
+                    'block_num': 22277588, 'trx_num': 35, 'trx_id': 'cf11b2ac8493c71063ec121b2e8517ab1e0e6bea'
                 }
 
             output when `raw_ops=True` is set:
+
             .. code-block:: js
 
                 {
@@ -722,6 +730,15 @@ class Blockchain(object):
                         block_num = block.get("id")
                         _id = self.hash_op(event)
                         timestamp = block.get("timestamp")
+                    elif "op" in event and isinstance(event["op"], dict) and "type" in event["op"] and "value" in event["op"]:
+                        op_type = event["op"]["type"]
+                        if len(op_type) > 10 and op_type[len(op_type) - 10:] == "_operation":
+                            op_type = op_type[:-10]
+                        op = event["op"]["value"]
+                        trx_id = event.get("trx_id")
+                        block_num = event.get("block")
+                        _id = self.hash_op(event["op"])
+                        timestamp = event.get("timestamp")
                     else:
                         op_type, op = event["op"]
                         trx_id = event.get("trx_id")
@@ -731,6 +748,7 @@ class Blockchain(object):
                     if not bool(opNames) or op_type in opNames and block_num > 0:
                         if raw_ops:
                             yield {"block_num": block_num,
+                                   "trx_num": trx_nr,
                                    "op": [op_type, op],
                                    "timestamp": timestamp}
                         else:
@@ -739,6 +757,7 @@ class Blockchain(object):
                             updated_op.update({"_id": _id,
                                                "timestamp": timestamp,
                                                "block_num": block_num,
+                                               "trx_num": trx_nr,
                                                "trx_id": trx_id})
                             yield updated_op
 
@@ -798,7 +817,7 @@ class Blockchain(object):
             lastname = None
         else:
             lastname = start
-        self.steem.rpc.set_next_node_on_empty_reply(False)
+        self.steem.rpc.set_next_node_on_empty_reply(self.steem.rpc.get_use_appbase())
         while True:
             if self.steem.rpc.get_use_appbase():
                 ret = self.steem.rpc.list_accounts({'start': lastname, 'limit': steps, 'order': 'by_name'}, api="database")["accounts"]
@@ -813,12 +832,12 @@ class Blockchain(object):
                     yield account_name
                     cnt += 1
                     if account_name == stop or (limit > 0 and cnt > limit):
-                        raise StopIteration
+                        return
             if lastname == account_name:
-                raise StopIteration
+                return
             lastname = account_name
             if len(ret) < steps:
-                raise StopIteration
+                return
 
     def get_account_count(self):
         """ Returns the number of accounts"""
@@ -858,12 +877,12 @@ class Blockchain(object):
                     yield account
                     cnt += 1
                     if account_name == stop or (limit > 0 and cnt > limit):
-                        raise StopIteration
+                        return
             if lastname == account_name:
-                raise StopIteration
+                return
             lastname = account_name
             if len(ret) < steps:
-                raise StopIteration
+                return
 
     def get_similar_account_names(self, name, limit=5):
         """ Returns limit similar accounts with name as list
@@ -878,7 +897,7 @@ class Blockchain(object):
             >>> from beem.blockchain import Blockchain
             >>> blockchain = Blockchain()
             >>> ret = blockchain.get_similar_account_names("test", limit=5)
-            >>> ret == ['test', 'test-1', 'test-2', 'test-ico', 'test-ilionx-123']
+            >>> len(ret) == 5
             True
 
         """
@@ -891,3 +910,31 @@ class Blockchain(object):
                 return account["accounts"]
         else:
             return self.steem.rpc.lookup_accounts(name, limit)
+
+    def find_rc_accounts(self, name):
+        """ Returns limit similar accounts with name as list
+
+        :param str name: account name to search rc params for (can also be a list of accounts)
+        :returns: RC params
+        :rtype: list
+
+        .. code-block:: python
+
+            >>> from beem.blockchain import Blockchain
+            >>> blockchain = Blockchain()
+            >>> ret = blockchain.find_rc_accounts(["test"])
+            >>> len(ret) == 1
+            True
+
+        """
+        if not self.steem.is_connected():
+            return None
+        self.steem.rpc.set_next_node_on_empty_reply(False)
+        if isinstance(name, list):
+            account = self.steem.rpc.find_rc_accounts({'accounts': name}, api="rc")
+            if bool(account):
+                return account["rc_accounts"]
+        else:
+            account = self.steem.rpc.find_rc_accounts({'accounts': [name]}, api="rc")
+            if bool(account):
+                return account["rc_accounts"][0]

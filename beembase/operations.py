@@ -6,15 +6,18 @@ from builtins import int, str
 from beemgraphenebase.py23 import bytes_types, integer_types, string_types, text_type
 from collections import OrderedDict
 import json
+from binascii import hexlify, unhexlify
+import re
 from beemgraphenebase.types import (
     Uint8, Int16, Uint16, Uint32, Uint64,
     Varint32, Int64, String, Bytes, Void,
     Array, PointInTime, Signature, Bool,
     Set, Fixed_array, Optional, Static_variant,
-    Map, Id
+    Map, Id, HexString
 )
 from .objects import GrapheneObject, isArgsThisClass
 from beemgraphenebase.account import PublicKey
+from beemgraphenebase.py23 import PY2, PY3
 from .operationids import operations
 from .objects import (
     Operation,
@@ -62,7 +65,7 @@ class Transfer(GrapheneObject):
         super(Transfer, self).__init__(OrderedDict([
             ('from', String(kwargs["from"])),
             ('to', String(kwargs["to"])),
-            ('amount', Amount(kwargs["amount"])),
+            ('amount', Amount(kwargs["amount"], prefix=prefix)),
             ('memo', memo),
         ]))
 
@@ -87,10 +90,11 @@ class Transfer_to_vesting(GrapheneObject):
             return
         if len(args) == 1 and len(kwargs) == 0:
             kwargs = args[0]
+        prefix = kwargs.get("prefix", default_prefix)
         super(Transfer_to_vesting, self).__init__(OrderedDict([
             ('from', String(kwargs["from"])),
             ('to', String(kwargs["to"])),
-            ('amount', Amount(kwargs["amount"])),
+            ('amount', Amount(kwargs["amount"], prefix=prefix)),
         ]))
 
 
@@ -100,9 +104,10 @@ class Withdraw_vesting(GrapheneObject):
             return
         if len(args) == 1 and len(kwargs) == 0:
             kwargs = args[0]
+        prefix = kwargs.get("prefix", default_prefix)
         super(Withdraw_vesting, self).__init__(OrderedDict([
             ('account', String(kwargs["account"])),
-            ('vesting_shares', Amount(kwargs["vesting_shares"])),
+            ('vesting_shares', Amount(kwargs["vesting_shares"], prefix=prefix)),
         ]))
 
 
@@ -163,8 +168,9 @@ class Op_wrapper(GrapheneObject):
             return
         if len(args) == 1 and len(kwargs) == 0:
             kwargs = args[0]
+        prefix = kwargs.get("prefix", default_prefix)
         super(Op_wrapper, self).__init__(OrderedDict([
-            ('op', Operation(kwargs["op"])),
+            ('op', Operation(kwargs["op"], prefix=prefix)),
         ]))
 
 
@@ -188,7 +194,7 @@ class Account_create(GrapheneObject):
                 meta = kwargs["json_metadata"]
 
         super(Account_create, self).__init__(OrderedDict([
-            ('fee', Amount(kwargs["fee"])),
+            ('fee', Amount(kwargs["fee"], prefix=prefix)),
             ('creator', String(kwargs["creator"])),
             ('new_account_name', String(kwargs["new_account_name"])),
             ('owner', Permission(kwargs["owner"], prefix=prefix)),
@@ -219,8 +225,8 @@ class Account_create_with_delegation(GrapheneObject):
                 meta = kwargs["json_metadata"]
 
         super(Account_create_with_delegation, self).__init__(OrderedDict([
-            ('fee', Amount(kwargs["fee"])),
-            ('delegation', Amount(kwargs["delegation"])),
+            ('fee', Amount(kwargs["fee"], prefix=prefix)),
+            ('delegation', Amount(kwargs["delegation"], prefix=prefix)),
             ('creator', String(kwargs["creator"])),
             ('new_account_name', String(kwargs["new_account_name"])),
             ('owner', Permission(kwargs["owner"], prefix=prefix)),
@@ -272,6 +278,64 @@ class Account_update(GrapheneObject):
         ]))
 
 
+class Witness_set_properties(GrapheneObject):
+    def __init__(self, *args, **kwargs):
+        if check_for_class(self, args):
+            return
+        if len(args) == 1 and len(kwargs) == 0:
+            kwargs = args[0]
+        prefix = kwargs.pop("prefix", default_prefix)
+        extensions = Array([])
+        props = {}
+        for k in kwargs["props"]:
+            if "key" == k[0]:
+                block_signing_key = (PublicKey(k[1], prefix=prefix))
+                props["key"] = repr(block_signing_key)
+            elif "new_signing_key" == k[0]:
+                new_signing_key = (PublicKey(k[1], prefix=prefix))
+                props["new_signing_key"] = repr(new_signing_key)
+        for k in kwargs["props"]:
+            if k[0] in ["key", "new_signing_key"]:
+                continue
+            if isinstance(k[1], str) and PY3:
+                is_hex = re.fullmatch(r'[0-9a-fA-F]+', k[1] or '') is not None
+            elif isinstance(k[1], str) and PY2:
+                is_hex = re.match(r'[0-9a-fA-F]+', k[1] or '') is not None
+            else:
+                is_hex = False
+            if isinstance(k[1], int) and k[0] in ["account_subsidy_budget", "account_subsidy_decay", "maximum_block_size"]:
+                props[k[0]] = (hexlify(Uint32(k[1]).__bytes__())).decode()
+            elif isinstance(k[1], int) and k[0] in ["sbd_interest_rate"]:
+                props[k[0]] = (hexlify(Uint16(k[1]).__bytes__())).decode()
+            elif not isinstance(k[1], str) and k[0] in ["account_creation_fee"]:
+                props[k[0]] = (hexlify(Amount(k[1], prefix=prefix).__bytes__())).decode()
+            elif not is_hex and isinstance(k[1], str) and k[0] in ["account_creation_fee"]:
+                props[k[0]] = (hexlify(Amount(k[1], prefix=prefix).__bytes__())).decode()
+            elif not isinstance(k[1], str) and k[0] in ["sbd_exchange_rate"]:
+                if 'prefix' not in k[1]:
+                    k[1]['prefix'] = prefix
+                props[k[0]] = (hexlify(ExchangeRate(k[1]).__bytes__())).decode()
+            elif not is_hex and k[0] in ["url"]:
+                props[k[0]] = (hexlify(String(k[1]).__bytes__())).decode()
+            else:
+                props[k[0]] = (k[1])
+        props_list = []
+        for k in props:
+            props_list.append(([String(k), HexString(props[k])]))
+        props_list = sorted(
+            props_list,
+            key=lambda x: str(x[0]),
+            reverse=False,
+        )
+        map_props = Map(props_list)
+
+        super(Witness_set_properties, self).__init__(OrderedDict([
+            ('owner', String(kwargs["owner"])),
+            ('props', map_props),
+            ('extensions', extensions),
+        ]))
+
+
 class Witness_update(GrapheneObject):
     def __init__(self, *args, **kwargs):
         if check_for_class(self, args):
@@ -285,13 +349,15 @@ class Witness_update(GrapheneObject):
         else:
             block_signing_key = PublicKey(
                 prefix + "1111111111111111111111111111111114T1Anm", prefix=prefix)
+        if 'prefix' not in kwargs['props']:
+            kwargs['props']['prefix'] = prefix
 
         super(Witness_update, self).__init__(OrderedDict([
             ('owner', String(kwargs["owner"])),
             ('url', String(kwargs["url"])),
             ('block_signing_key', block_signing_key),
             ('props', WitnessProps(kwargs["props"])),
-            ('fee', Amount(kwargs["fee"])),
+            ('fee', Amount(kwargs["fee"], prefix=prefix)),
         ]))
 
 
@@ -354,6 +420,7 @@ class Comment_options(GrapheneObject):
             return
         if len(args) == 1 and len(kwargs) == 0:
             kwargs = args[0]
+        prefix = kwargs.get("prefix", default_prefix)
 
         # handle beneficiaries
         if "beneficiaries" in kwargs and kwargs['beneficiaries']:
@@ -368,7 +435,7 @@ class Comment_options(GrapheneObject):
                 ('author', String(kwargs["author"])),
                 ('permlink', String(kwargs["permlink"])),
                 ('max_accepted_payout',
-                 Amount(kwargs["max_accepted_payout"])),
+                 Amount(kwargs["max_accepted_payout"], prefix=prefix)),
                 ('percent_steem_dollars',
                  Uint16(int(kwargs["percent_steem_dollars"]))),
                 ('allow_votes', Bool(bool(kwargs["allow_votes"]))),
@@ -397,6 +464,9 @@ class Feed_publish(GrapheneObject):
             return
         if len(args) == 1 and len(kwargs) == 0:
             kwargs = args[0]
+        prefix = kwargs.get("prefix", default_prefix)
+        if 'prefix' not in kwargs['exchange_rate']:
+            kwargs['exchange_rate']['prefix'] = prefix
         super(Feed_publish, self).__init__(
             OrderedDict([
                 ('publisher', String(kwargs["publisher"])),
@@ -410,11 +480,12 @@ class Convert(GrapheneObject):
             return
         if len(args) == 1 and len(kwargs) == 0:
             kwargs = args[0]
+        prefix = kwargs.get("prefix", default_prefix)
         super(Convert, self).__init__(
             OrderedDict([
                 ('owner', String(kwargs["owner"])),
                 ('requestid', Uint32(kwargs["requestid"])),
-                ('amount', Amount(kwargs["amount"])),
+                ('amount', Amount(kwargs["amount"], prefix=prefix)),
             ]))
 
 
@@ -446,16 +517,49 @@ class Limit_order_cancel(GrapheneObject):
             ]))
 
 
-class Prove_authority(GrapheneObject):
+class Claim_account(GrapheneObject):
     def __init__(self, *args, **kwargs):
         if check_for_class(self, args):
             return
         if len(args) == 1 and len(kwargs) == 0:
             kwargs = args[0]
-        super(Prove_authority, self).__init__(
+        prefix = kwargs.get("prefix", default_prefix)
+        super(Claim_account, self).__init__(
             OrderedDict([
-                ('challenged', String(kwargs["challenged"])),
-                ('require_owner', Bool(kwargs["require_owner"])),
+                ('creator', String(kwargs["creator"])),
+                ('fee', Amount(kwargs["fee"], prefix=prefix)),
+                ('extensions', Array([])),
+            ]))
+
+
+class Create_claimed_account(GrapheneObject):
+    def __init__(self, *args, **kwargs):
+        if check_for_class(self, args):
+            return
+        if len(args) == 1 and len(kwargs) == 0:
+            kwargs = args[0]
+        prefix = kwargs.get("prefix", default_prefix)
+
+        if not len(kwargs["new_account_name"]) <= 16:
+            raise AssertionError("Account name must be at most 16 chars long")
+
+        meta = ""
+        if "json_metadata" in kwargs and kwargs["json_metadata"]:
+            if isinstance(kwargs["json_metadata"], dict):
+                meta = json.dumps(kwargs["json_metadata"])
+            else:
+                meta = kwargs["json_metadata"]
+
+        super(Create_claimed_account, self).__init__(
+            OrderedDict([
+                ('creator', String(kwargs["creator"])),
+                ('new_account_name', String(kwargs["new_account_name"])),
+                ('owner', Permission(kwargs["owner"], prefix=prefix)),
+                ('active', Permission(kwargs["active"], prefix=prefix)),
+                ('posting', Permission(kwargs["posting"], prefix=prefix)),
+                ('memo_key', PublicKey(kwargs["memo_key"], prefix=prefix)),
+                ('json_metadata', String(meta)),
+                ('extensions', Array([])),
             ]))
 
 
@@ -465,11 +569,12 @@ class Delegate_vesting_shares(GrapheneObject):
             return
         if len(args) == 1 and len(kwargs) == 0:
             kwargs = args[0]
+        prefix = kwargs.get("prefix", default_prefix)
         super(Delegate_vesting_shares, self).__init__(
             OrderedDict([
                 ('delegator', String(kwargs["delegator"])),
                 ('delegatee', String(kwargs["delegatee"])),
-                ('vesting_shares', Amount(kwargs["vesting_shares"])),
+                ('vesting_shares', Amount(kwargs["vesting_shares"], prefix=prefix)),
             ]))
 
 
@@ -479,12 +584,13 @@ class Limit_order_create(GrapheneObject):
             return
         if len(args) == 1 and len(kwargs) == 0:
             kwargs = args[0]
+        prefix = kwargs.get("prefix", default_prefix)
         super(Limit_order_create, self).__init__(
             OrderedDict([
                 ('owner', String(kwargs["owner"])),
                 ('orderid', Uint32(kwargs["orderid"])),
-                ('amount_to_sell', Amount(kwargs["amount_to_sell"])),
-                ('min_to_receive', Amount(kwargs["min_to_receive"])),
+                ('amount_to_sell', Amount(kwargs["amount_to_sell"], prefix=prefix)),
+                ('min_to_receive', Amount(kwargs["min_to_receive"], prefix=prefix)),
                 ('fill_or_kill', Bool(kwargs["fill_or_kill"])),
                 ('expiration', PointInTime(kwargs["expiration"])),
             ]))
@@ -496,11 +602,14 @@ class Limit_order_create2(GrapheneObject):
             return
         if len(args) == 1 and len(kwargs) == 0:
             kwargs = args[0]
+        prefix = kwargs.get("prefix", default_prefix)
+        if 'prefix' not in kwargs['exchange_rate']:
+            kwargs['exchange_rate']['prefix'] = prefix
         super(Limit_order_create2, self).__init__(
             OrderedDict([
                 ('owner', String(kwargs["owner"])),
                 ('orderid', Uint32(kwargs["orderid"])),
-                ('amount_to_sell', Amount(kwargs["amount_to_sell"])),
+                ('amount_to_sell', Amount(kwargs["amount_to_sell"], prefix=prefix)),
                 ('fill_or_kill', Bool(kwargs["fill_or_kill"])),
                 ('exchange_rate', ExchangeRate(kwargs["exchange_rate"])),
                 ('expiration', PointInTime(kwargs["expiration"])),
@@ -527,6 +636,7 @@ class Transfer_from_savings(GrapheneObject):
             return
         if len(args) == 1 and len(kwargs) == 0:
             kwargs = args[0]
+        prefix = kwargs.get("prefix", default_prefix)
         if "memo" not in kwargs:
             kwargs["memo"] = ""
 
@@ -535,7 +645,7 @@ class Transfer_from_savings(GrapheneObject):
                 ('from', String(kwargs["from"])),
                 ('request_id', Uint32(kwargs["request_id"])),
                 ('to', String(kwargs["to"])),
-                ('amount', Amount(kwargs["amount"])),
+                ('amount', Amount(kwargs["amount"], prefix=prefix)),
                 ('memo', String(kwargs["memo"])),
             ]))
 
@@ -559,12 +669,13 @@ class Claim_reward_balance(GrapheneObject):
             return
         if len(args) == 1 and len(kwargs) == 0:
             kwargs = args[0]
+        prefix = kwargs.get("prefix", default_prefix)
         super(Claim_reward_balance, self).__init__(
             OrderedDict([
                 ('account', String(kwargs["account"])),
-                ('reward_steem', Amount(kwargs["reward_steem"])),
-                ('reward_sbd', Amount(kwargs["reward_sbd"])),
-                ('reward_vests', Amount(kwargs["reward_vests"])),
+                ('reward_steem', Amount(kwargs["reward_steem"], prefix=prefix)),
+                ('reward_sbd', Amount(kwargs["reward_sbd"], prefix=prefix)),
+                ('reward_vests', Amount(kwargs["reward_vests"], prefix=prefix)),
             ]))
 
 
@@ -574,13 +685,14 @@ class Transfer_to_savings(GrapheneObject):
             return
         if len(args) == 1 and len(kwargs) == 0:
             kwargs = args[0]
+        prefix = kwargs.get("prefix", default_prefix)
         if "memo" not in kwargs:
             kwargs["memo"] = ""
         super(Transfer_to_savings, self).__init__(
             OrderedDict([
                 ('from', String(kwargs["from"])),
                 ('to', String(kwargs["to"])),
-                ('amount', Amount(kwargs["amount"])),
+                ('amount', Amount(kwargs["amount"], prefix=prefix)),
                 ('memo', String(kwargs["memo"])),
             ]))
 
@@ -626,6 +738,7 @@ class Escrow_transfer(GrapheneObject):
             return
         if len(args) == 1 and len(kwargs) == 0:
             kwargs = args[0]
+        prefix = kwargs.get("prefix", default_prefix)
         meta = ""
         if "json_meta" in kwargs and kwargs["json_meta"]:
             if (isinstance(kwargs["json_meta"], dict) or isinstance(kwargs["json_meta"], list)):
@@ -638,9 +751,9 @@ class Escrow_transfer(GrapheneObject):
                 ('to', String(kwargs["to"])),
                 ('agent', String(kwargs["agent"])),
                 ('escrow_id', Uint32(kwargs["escrow_id"])),
-                ('sbd_amount', Amount(kwargs["sbd_amount"])),
-                ('steem_amount', Amount(kwargs["steem_amount"])),
-                ('fee', Amount(kwargs["fee"])),
+                ('sbd_amount', Amount(kwargs["sbd_amount"], prefix=prefix)),
+                ('steem_amount', Amount(kwargs["steem_amount"], prefix=prefix)),
+                ('fee', Amount(kwargs["fee"], prefix=prefix)),
                 ('ratification_deadline', PointInTime(kwargs["ratification_deadline"])),
                 ('escrow_expiration', PointInTime(kwargs["escrow_expiration"])),
                 ('json_meta', String(meta)),
@@ -668,14 +781,15 @@ class Escrow_release(GrapheneObject):
             return
         if len(args) == 1 and len(kwargs) == 0:
             kwargs = args[0]
+        prefix = kwargs.get("prefix", default_prefix)
         super(Escrow_release, self).__init__(
             OrderedDict([
                 ('from', String(kwargs["from"])),
                 ('to', String(kwargs["to"])),
                 ('who', String(kwargs["who"])),
                 ('escrow_id', Uint32(kwargs["escrow_id"])),
-                ('sbd_amount', Amount(kwargs["sbd_amount"])),
-                ('steem_amount', Amount(kwargs["steem_amount"])),
+                ('sbd_amount', Amount(kwargs["sbd_amount"], prefix=prefix)),
+                ('steem_amount', Amount(kwargs["steem_amount"], prefix=prefix)),
             ]))
 
 

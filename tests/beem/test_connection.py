@@ -15,13 +15,13 @@ class Testcases(unittest.TestCase):
         nodelist = NodeList()
         nodelist.update_nodes(steem_instance=Steem(node=nodelist.get_nodes(normal=True, appbase=True), num_retries=10))
         b1 = Steem(
-            node=nodelist.get_testnet(),
+            node=nodelist.get_testnet(testnet=True, testnetdev=False),
             nobroadcast=True,
             num_retries=10
         )
 
         b2 = Steem(
-            node=nodelist.get_nodes(appbase=False),
+            node=nodelist.get_nodes(),
             nobroadcast=True,
             num_retries=10
         )
@@ -32,19 +32,19 @@ class Testcases(unittest.TestCase):
         nodelist = NodeList()
         nodelist.update_nodes(steem_instance=Steem(node=nodelist.get_nodes(normal=True, appbase=True), num_retries=10))
         b1 = Steem(
-            node=nodelist.get_testnet(),
+            node=nodelist.get_testnet(testnet=True, testnetdev=False),
             nobroadcast=True,
         )
         set_shared_steem_instance(b1)
-        test = Account("test")
+        test = Account("beem")
 
         b2 = Steem(
-            node=nodelist.get_nodes(appbase=False),
+            node=nodelist.get_nodes(),
             nobroadcast=True,
         )
         set_shared_steem_instance(b2)
 
-        bts = Account("test")
+        bts = Account("beem")
 
         self.assertEqual(test.steem.prefix, "STX")
         self.assertEqual(bts.steem.prefix, "STM")

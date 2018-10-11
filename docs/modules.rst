@@ -18,6 +18,7 @@ beem Modules
    beem.blockchain
    beem.blockchainobject
    beem.comment
+   beem.conveyor
    beem.discussions
    beem.exceptions
    beem.imageuploader
@@ -27,6 +28,8 @@ beem Modules
    beem.message
    beem.notify
    beem.price
+   beem.rc
+   beem.snapshot
    beem.storage
    beem.transactionbuilder
    beem.utils
@@ -67,7 +70,7 @@ beemgraphenebase Modules
    beemgraphenebase.account
    beemgraphenebase.base58
    beemgraphenebase.bip38
-   beemgraphenebase.ecdasig
+   beemgraphenebase.ecdsasig
    beemgraphenebase.objects
    beemgraphenebase.objecttypes
    beemgraphenebase.operations

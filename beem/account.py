@@ -19,9 +19,10 @@ from .blockchain import Blockchain
 from .utils import formatTimeString, formatTimedelta, remove_from_dict, reputation_to_score, addTzInfo
 from beem.amount import Amount
 from beembase import operations
+from beem.rc import RC
 from beemgraphenebase.account import PrivateKey, PublicKey
 from beemgraphenebase.py23 import bytes_types, integer_types, string_types, text_type
-from beem.constants import STEEM_VOTE_REGENERATION_SECONDS, STEEM_1_PERCENT, STEEM_100_PERCENT
+from beem.constants import STEEM_VOTE_REGENERATION_SECONDS, STEEM_1_PERCENT, STEEM_100_PERCENT, STEEM_VOTING_MANA_REGENERATION_SECONDS
 log = logging.getLogger(__name__)
 
 
@@ -94,17 +95,17 @@ class Account(BlockchainObject):
         """
         if not self.steem.is_connected():
             return
-        self.steem.rpc.set_next_node_on_empty_reply(False)
+        self.steem.rpc.set_next_node_on_empty_reply(self.steem.rpc.get_use_appbase())
         if self.steem.rpc.get_use_appbase():
                 account = self.steem.rpc.find_accounts({'accounts': [self.identifier]}, api="database")
         else:
             if self.full:
                 account = self.steem.rpc.get_accounts(
-                    [self.identifier])
+                    [self.identifier], api="database")
             else:
                 account = self.steem.rpc.lookup_account_names(
-                    [self.identifier])
-        if self.steem.rpc.get_use_appbase():
+                    [self.identifier], api="database")
+        if self.steem.rpc.get_use_appbase() and "accounts" in account:
             account = account["accounts"]
         if account and isinstance(account, list) and len(account) == 1:
             account = account[0]
@@ -118,11 +119,11 @@ class Account(BlockchainObject):
 
     def _parse_json_data(self, account):
         parse_int = [
-            "sbd_seconds", "savings_sbd_seconds", "average_bandwidth", "lifetime_bandwidth", "lifetime_market_bandwidth", "reputation",
+            "sbd_seconds", "savings_sbd_seconds", "average_bandwidth", "lifetime_bandwidth", "lifetime_market_bandwidth", "reputation", "withdrawn", "to_withdraw",
         ]
         for p in parse_int:
             if p in account and isinstance(account.get(p), string_types):
-                account[p] = int(account.get(p, "0"))
+                account[p] = int(account.get(p, 0))
         if "proxied_vsf_votes" in account:
             proxied_vsf_votes = []
             for p_int in account["proxied_vsf_votes"]:
@@ -164,9 +165,15 @@ class Account(BlockchainObject):
     def json(self):
         output = self.copy()
         parse_int = [
-            "sbd_seconds", "savings_sbd_seconds", "average_bandwidth", "lifetime_bandwidth", "lifetime_market_bandwidth", "reputation",
+            "sbd_seconds", "savings_sbd_seconds",
+        ]
+        parse_int_without_zero = [
+            "withdrawn", "to_withdraw", "lifetime_bandwidth", 'average_bandwidth',
         ]
         for p in parse_int:
+            if p in output and isinstance(output[p], integer_types):
+                output[p] = str(output[p])
+        for p in parse_int_without_zero:
             if p in output and isinstance(output[p], integer_types) and output[p] != 0:
                 output[p] = str(output[p])
         if "proxied_vsf_votes" in output:
@@ -203,16 +210,41 @@ class Account(BlockchainObject):
             "delegated_vesting_shares",
             "received_vesting_shares",
             "vesting_withdraw_rate",
-            "vesting_balance"
+            "vesting_balance",
         ]
         for p in amounts:
             if p in output:
-                output[p] = output.get(p, Amount("0.000 SBD", steem_instance=self.steem)).json()
+                if p in output:
+                    output[p] = output.get(p).json()
         return json.loads(str(json.dumps(output)))
 
     def getSimilarAccountNames(self, limit=5):
         """Deprecated, please use get_similar_account_names"""
         return self.get_similar_account_names(limit=limit)
+
+    def get_rc(self):
+        """Return RC of account"""
+        b = Blockchain(steem_instance=self.steem)
+        return b.find_rc_accounts(self["name"])
+
+    def get_rc_manabar(self):
+        """Returns current_mana and max_mana for RC"""
+        rc_param = self.get_rc()
+        max_mana = int(rc_param["max_rc"])
+        last_mana = int(rc_param["rc_manabar"]["current_mana"])
+        last_update_time = rc_param["rc_manabar"]["last_update_time"]
+        last_update = datetime.utcfromtimestamp(last_update_time)
+        diff_in_seconds = (datetime.utcnow() - last_update).total_seconds()
+        current_mana = int(last_mana + diff_in_seconds * max_mana / STEEM_VOTING_MANA_REGENERATION_SECONDS)
+        if current_mana > max_mana:
+            current_mana = max_mana
+        if max_mana > 0:
+            current_pct = current_mana / max_mana * 100
+        else:
+            current_pct = 0
+        max_rc_creation_adjustment = Amount(rc_param["max_rc_creation_adjustment"], steem_instance=self.steem)
+        return {"last_mana": last_mana, "last_update_time": last_update_time, "current_mana": current_mana,
+                "max_mana": max_mana, "current_pct": current_pct, "max_rc_creation_adjustment": max_rc_creation_adjustment}
 
     def get_similar_account_names(self, limit=5):
         """ Returns ``limit`` account names similar to the current account
@@ -282,6 +314,14 @@ class Account(BlockchainObject):
             used_kb = bandwidth["used"] / 1024
             allocated_mb = bandwidth["allocated"] / 1024 / 1024
         last_vote_time_str = formatTimedelta(addTzInfo(datetime.utcnow()) - self["last_vote_time"])
+        try:
+            rc_mana = self.get_rc_manabar()
+            rc = self.get_rc()
+            rc_calc = RC(steem_instance=self.steem)
+        except:
+            rc_mana = None
+            rc_calc = None
+
         if use_table:
             t = PrettyTable(["Key", "Value"])
             t.align = "l"
@@ -290,11 +330,26 @@ class Account(BlockchainObject):
             t.add_row(["Vote Value", "%.2f $" % (self.get_voting_value_SBD())])
             t.add_row(["Last vote", "%s ago" % last_vote_time_str])
             t.add_row(["Full in ", "%s" % (self.get_recharge_time_str())])
-            t.add_row(["Steem Power", "%.2f STEEM" % (self.get_steem_power())])
+            t.add_row(["Steem Power", "%.2f %s" % (self.get_steem_power(), self.steem.steem_symbol)])
             t.add_row(["Balance", "%s, %s" % (str(self.balances["available"][0]), str(self.balances["available"][1]))])
-            if bandwidth["allocated"] > 0:
+            if False and bandwidth["allocated"] > 0:
                 t.add_row(["Remaining Bandwidth", "%.2f %%" % (remaining)])
                 t.add_row(["used/allocated Bandwidth", "(%.0f kb of %.0f mb)" % (used_kb, allocated_mb)])
+            if rc_mana is not None:
+                estimated_rc = int(rc["max_rc"]) * rc_mana["current_pct"] / 100
+                t.add_row(["Remaining RC", "%.2f %%" % (rc_mana["current_pct"])])
+                t.add_row(["Remaining RC", "(%.0f G RC of %.0f G RC)" % (estimated_rc / 10**9, int(rc["max_rc"]) / 10**9)])
+                t.add_row(["Full in ", "%s" % (self.get_manabar_recharge_time_str(rc_mana))])
+                t.add_row(["Est. RC for a comment", "%.2f G RC" % (rc_calc.comment() / 10**9)])
+                t.add_row(["Est. RC for a vote", "%.2f G RC" % (rc_calc.vote() / 10**9)])
+                t.add_row(["Est. RC for a transfer", "%.2f G RC" % (rc_calc.transfer() / 10**9)])
+                t.add_row(["Est. RC for a custom_json", "%.2f G RC" % (rc_calc.custom_json() / 10**9)])
+
+                t.add_row(["Comments with current RC", "%d comments" % (int(estimated_rc / rc_calc.comment()))])
+                t.add_row(["Votes with current RC", "%d votes" % (int(estimated_rc / rc_calc.vote()))])
+                t.add_row(["Transfer with current RC", "%d transfers" % (int(estimated_rc / rc_calc.transfer()))])
+                t.add_row(["Custom_json with current RC", "%d transfers" % (int(estimated_rc / rc_calc.custom_json()))])
+
             if return_str:
                 return t.get_string(**kwargs)
             else:
@@ -308,10 +363,21 @@ class Account(BlockchainObject):
             ret += "--- Balance ---\n"
             ret += "%.2f SP, " % (self.get_steem_power())
             ret += "%s, %s\n" % (str(self.balances["available"][0]), str(self.balances["available"][1]))
-            if bandwidth["allocated"] > 0:
+            if False and bandwidth["allocated"] > 0:
                 ret += "--- Bandwidth ---\n"
                 ret += "Remaining: %.2f %%" % (remaining)
-                ret += " (%.0f kb of %.0f mb)" % (used_kb, allocated_mb)
+                ret += " (%.0f kb of %.0f mb)\n" % (used_kb, allocated_mb)
+            if rc_mana is not None:
+                estimated_rc = int(rc["max_rc"]) * rc_mana["current_pct"] / 100
+                ret += "--- RC manabar ---\n"
+                ret += "Remaining: %.2f %%" % (rc_mana["current_pct"])
+                ret += " (%.0f G RC of %.0f G RC)\n" % (estimated_rc / 10**9, int(rc["max_rc"]) / 10**9)
+                ret += "full in %s\n" % (self.get_manabar_recharge_time_str(rc_mana))
+                ret += "--- Approx Costs ---\n"
+                ret += "comment - %.2f G RC - enough RC for %d comments\n" % (rc_calc.comment() / 10**9, int(estimated_rc / rc_calc.comment()))
+                ret += "vote - %.2f G RC - enough RC for %d votes\n" % (rc_calc.vote() / 10**9, int(estimated_rc / rc_calc.vote()))
+                ret += "transfer - %.2f G RC - enough RC for %d transfers\n" % (rc_calc.transfer() / 10**9, int(estimated_rc / rc_calc.transfer()))
+                ret += "custom_json - %.2f G RC - enough RC for %d custom_json\n" % (rc_calc.custom_json() / 10**9, int(estimated_rc / rc_calc.custom_json()))
             if return_str:
                 return ret
             print(ret)
@@ -330,30 +396,78 @@ class Account(BlockchainObject):
             rep = int(self['reputation'])
         return reputation_to_score(rep)
 
+    def get_manabar(self):
+        """"Return manabar"""
+        max_mana = self.get_effective_vesting_shares()
+        if max_mana == 0:
+            props = self.steem.get_chain_properties()
+            required_fee_steem = Amount(props["account_creation_fee"], steem_instance=self.steem)
+            max_mana = int(self.steem.sp_to_vests(required_fee_steem))
+        last_mana = int(self["voting_manabar"]["current_mana"])
+        last_update_time = self["voting_manabar"]["last_update_time"]
+        last_update = datetime.utcfromtimestamp(last_update_time)
+        diff_in_seconds = (addTzInfo(datetime.utcnow()) - addTzInfo(last_update)).total_seconds()
+        current_mana = int(last_mana + diff_in_seconds * max_mana / STEEM_VOTING_MANA_REGENERATION_SECONDS)
+        if current_mana > max_mana:
+            current_mana = max_mana
+        if max_mana > 0:
+            current_mana_pct = current_mana / max_mana * 100
+        else:
+            current_mana_pct = 0
+        return {"last_mana": last_mana, "last_update_time": last_update_time,
+                "current_mana": current_mana, "max_mana": max_mana, "current_mana_pct": current_mana_pct}
+
     def get_voting_power(self, with_regeneration=True):
         """ Returns the account voting power in the range of 0-100%
         """
-        if with_regeneration:
-            diff_in_seconds = (addTzInfo(datetime.utcnow()) - (self["last_vote_time"])).total_seconds()
-            regenerated_vp = diff_in_seconds * STEEM_100_PERCENT / STEEM_VOTE_REGENERATION_SECONDS / 100
-        else:
-            regenerated_vp = 0
-        total_vp = (self["voting_power"] / 100 + regenerated_vp)
+        if "voting_manabar" in self:
+            manabar = self.get_manabar()
+            if with_regeneration:
+                total_vp = manabar["current_mana_pct"]
+            else:
+                if manabar["max_mana"] > 0:
+                    total_vp = manabar["last_mana"] / manabar["max_mana"] * 100
+                else:
+                    total_vp = 0
+        elif "voting_power" in self:
+            if with_regeneration:
+                last_vote_time = self["last_vote_time"]
+                diff_in_seconds = (addTzInfo(datetime.utcnow()) - (last_vote_time)).total_seconds()
+                regenerated_vp = diff_in_seconds * STEEM_100_PERCENT / STEEM_VOTE_REGENERATION_SECONDS / 100
+            else:
+                regenerated_vp = 0
+            total_vp = (self["voting_power"] / 100 + regenerated_vp)
         if total_vp > 100:
             return 100
         if total_vp < 0:
             return 0
         return total_vp
 
+    def get_vests(self, only_own_vests=False):
+        """ Returns the account vests
+        """
+        vests = (self["vesting_shares"])
+        if not only_own_vests and "delegated_vesting_shares" in self and "received_vesting_shares" in self:
+            vests = vests - (self["delegated_vesting_shares"]) + (self["received_vesting_shares"])
+
+        return vests
+
+    def get_effective_vesting_shares(self):
+        """Returns the effective vesting shares"""
+        vesting_shares = int(self["vesting_shares"])
+        if "delegated_vesting_shares" in self and "received_vesting_shares" in self:
+            vesting_shares = vesting_shares - int(self["delegated_vesting_shares"]) + int(self["received_vesting_shares"])
+        timestamp = (self["next_vesting_withdrawal"] - addTzInfo(datetime(1970, 1, 1))).total_seconds()
+        if timestamp > 0 and "vesting_withdraw_rate" in self and "to_withdraw" in self and "withdrawn" in self:
+            vesting_shares -= min(int(self["vesting_withdraw_rate"]), int(self["to_withdraw"]) - int(self["withdrawn"]))
+        return vesting_shares
+
     def get_steem_power(self, onlyOwnSP=False):
         """ Returns the account steem power
         """
-        vests = (self["vesting_shares"])
-        if not onlyOwnSP and "delegated_vesting_shares" in self and "received_vesting_shares" in self:
-            vests = vests - (self["delegated_vesting_shares"]) + (self["received_vesting_shares"])
-        return self.steem.vests_to_sp(vests)
+        return self.steem.vests_to_sp(self.get_vests(only_own_vests=onlyOwnSP))
 
-    def get_voting_value_SBD(self, voting_weight=100, voting_power=None, steem_power=None):
+    def get_voting_value_SBD(self, voting_weight=100, voting_power=None, steem_power=None, not_broadcasted_vote=True):
         """ Returns the account voting value in SBD
         """
         if voting_power is None:
@@ -363,8 +477,34 @@ class Account(BlockchainObject):
         else:
             sp = steem_power
 
-        VoteValue = self.steem.sp_to_sbd(sp, voting_power=voting_power * 100, vote_pct=voting_weight * 100)
+        VoteValue = self.steem.sp_to_sbd(sp, voting_power=voting_power * 100, vote_pct=voting_weight * 100, not_broadcasted_vote=not_broadcasted_vote)
         return VoteValue
+
+    def get_vote_pct_for_SBD(self, sbd, voting_power=None, steem_power=None, not_broadcasted_vote=True):
+        """ Returns the voting percentage needed to have a vote worth a given number of SBD.
+
+            If the returned number is bigger than 10000 or smaller than -10000,
+            the given SBD value is too high for that account
+
+            :param str/int/Amount sbd: The amount of SBD in vote value
+
+        """
+        if voting_power is None:
+            voting_power = self.get_voting_power()
+        if steem_power is None:
+            steem_power = self.get_steem_power()
+
+        if isinstance(sbd, Amount):
+            sbd = Amount(sbd, steem_instance=self.steem)
+        elif isinstance(sbd, string_types):
+            sbd = Amount(sbd, steem_instance=self.steem)
+        else:
+            sbd = Amount(sbd, 'SBD', steem_instance=self.steem)
+        if sbd['symbol'] != 'SBD':
+            raise AssertionError('Should input SBD, not any other asset!')
+
+        vote_pct = self.steem.rshares_to_vote_pct(self.steem.sbd_to_rshares(sbd, not_broadcasted_vote=not_broadcasted_vote), voting_power=voting_power * 100, steem_power=steem_power)
+        return vote_pct
 
     def get_creator(self):
         """ Returns the account creator or `None` if the account was mined
@@ -394,7 +534,7 @@ class Account(BlockchainObject):
         missing_vp = voting_power_goal - self.get_voting_power()
         if missing_vp < 0:
             return 0
-        recharge_seconds = missing_vp * 100 * STEEM_VOTE_REGENERATION_SECONDS / STEEM_100_PERCENT
+        recharge_seconds = missing_vp * 100 * STEEM_VOTING_MANA_REGENERATION_SECONDS / STEEM_100_PERCENT
         return timedelta(seconds=recharge_seconds)
 
     def get_recharge_time(self, voting_power_goal=100):
@@ -404,6 +544,41 @@ class Account(BlockchainObject):
 
         """
         return addTzInfo(datetime.utcnow()) + self.get_recharge_timedelta(voting_power_goal)
+
+    def get_manabar_recharge_time_str(self, manabar, recharge_pct_goal=100):
+        """ Returns the account manabar recharge time as string
+
+            :param dict manabar: manabar dict from get_manabar() or get_rc_manabar()
+            :param float recharge_pct_goal: mana recovery goal in percentage (default is 100)
+
+        """
+        remainingTime = self.get_manabar_recharge_timedelta(manabar, recharge_pct_goal=recharge_pct_goal)
+        return formatTimedelta(remainingTime)
+
+    def get_manabar_recharge_timedelta(self, manabar, recharge_pct_goal=100):
+        """ Returns the account mana recharge time as timedelta object
+
+            :param dict manabar: manabar dict from get_manabar() or get_rc_manabar()
+            :param float recharge_pct_goal: mana recovery goal in percentage (default is 100)
+
+        """
+        if "current_mana_pct" in manabar:
+            missing_rc_pct = recharge_pct_goal - manabar["current_mana_pct"]
+        else:
+            missing_rc_pct = recharge_pct_goal - manabar["current_pct"]
+        if missing_rc_pct < 0:
+            return 0
+        recharge_seconds = missing_rc_pct * 100 * STEEM_VOTING_MANA_REGENERATION_SECONDS / STEEM_100_PERCENT
+        return timedelta(seconds=recharge_seconds)
+
+    def get_manabar_recharge_time(self, manabar, recharge_pct_goal=100):
+        """ Returns the account mana recharge time in minutes
+
+            :param dict manabar: manabar dict from get_manabar() or get_rc_manabar()
+            :param float recharge_pct_goal: mana recovery goal in percentage (default is 100)
+
+        """
+        return addTzInfo(datetime.utcnow()) + self.get_manabar_recharge_timedelta(manabar, recharge_pct_goal)
 
     def get_feed(self, start_entry_id=0, limit=100, raw_data=False, short_entries=False, account=None):
         """ Returns a list of items in an account’s feed
@@ -596,37 +771,37 @@ class Account(BlockchainObject):
         else:
             return self.steem.rpc.get_follow_count(account, api='follow')
 
-    def get_followers(self, raw_name_list=True):
+    def get_followers(self, raw_name_list=True, limit=100):
         """ Returns the account followers as list
         """
-        name_list = [x['follower'] for x in self._get_followers(direction="follower")]
+        name_list = [x['follower'] for x in self._get_followers(direction="follower", limit=limit)]
         if raw_name_list:
             return name_list
         else:
             return Accounts(name_list, steem_instance=self.steem)
 
-    def get_following(self, raw_name_list=True):
+    def get_following(self, raw_name_list=True, limit=100):
         """ Returns who the account is following as list
         """
-        name_list = [x['following'] for x in self._get_followers(direction="following")]
+        name_list = [x['following'] for x in self._get_followers(direction="following", limit=limit)]
         if raw_name_list:
             return name_list
         else:
             return Accounts(name_list, steem_instance=self.steem)
 
-    def get_muters(self, raw_name_list=True):
+    def get_muters(self, raw_name_list=True, limit=100):
         """ Returns the account muters as list
         """
-        name_list = [x['follower'] for x in self._get_followers(direction="follower", what="ignore")]
+        name_list = [x['follower'] for x in self._get_followers(direction="follower", what="ignore", limit=limit)]
         if raw_name_list:
             return name_list
         else:
             return Accounts(name_list, steem_instance=self.steem)
 
-    def get_mutings(self, raw_name_list=True):
+    def get_mutings(self, raw_name_list=True, limit=100):
         """ Returns who the account is muting as list
         """
-        name_list = [x['following'] for x in self._get_followers(direction="following", what="ignore")]
+        name_list = [x['following'] for x in self._get_followers(direction="following", what="ignore", limit=limit)]
         if raw_name_list:
             return name_list
         else:
@@ -637,23 +812,34 @@ class Account(BlockchainObject):
         """
         if not self.steem.is_connected():
             raise OfflineHasNoRPCException("No RPC available in offline mode!")
-        self.steem.rpc.set_next_node_on_empty_reply(False)
-        if self.steem.rpc.get_use_appbase():
-            query = {'account': self.name, 'start': last_user, 'type': what, 'limit': limit}
-            if direction == "follower":
-                followers = self.steem.rpc.get_followers(query, api='follow')['followers']
-            elif direction == "following":
-                followers = self.steem.rpc.get_following(query, api='follow')['following']
-        else:
-            if direction == "follower":
-                followers = self.steem.rpc.get_followers(self.name, last_user, what, limit, api='follow')
-            elif direction == "following":
-                followers = self.steem.rpc.get_following(self.name, last_user, what, limit, api='follow')
+        followers_list = []
+        limit_reached = True
+        cnt = 0
+        while limit_reached:
+            self.steem.rpc.set_next_node_on_empty_reply(False)
+            if self.steem.rpc.get_use_appbase():
+                query = {'account': self.name, 'start': last_user, 'type': what, 'limit': limit}
+                if direction == "follower":
+                    followers = self.steem.rpc.get_followers(query, api='follow')['followers']
+                elif direction == "following":
+                    followers = self.steem.rpc.get_following(query, api='follow')['following']
+            else:
+                if direction == "follower":
+                    followers = self.steem.rpc.get_followers(self.name, last_user, what, limit, api='follow')
+                elif direction == "following":
+                    followers = self.steem.rpc.get_following(self.name, last_user, what, limit, api='follow')
+            if cnt == 0:
+                followers_list = followers
+            elif len(followers) > 1:
+                followers_list += followers[1:]
+            if len(followers) >= limit:
+                last_user = followers[-1][direction]
+                limit_reached = True
+                cnt += 1
+            else:
+                limit_reached = False
 
-        if len(followers) >= limit:
-            followers += self._get_followers(
-                direction=direction, last_user=followers[-1][direction])[1:]
-        return followers
+        return followers_list
 
     @property
     def available_balances(self):
@@ -687,14 +873,14 @@ class Account(BlockchainObject):
 
     @property
     def total_balances(self):
-        symbols = [self.available_balances[0]["symbol"], self.available_balances[1]["symbol"], self.available_balances[2]["symbol"]]
-        return [
-            self.get_balance(self.available_balances, symbols[0]) + self.get_balance(self.saving_balances, symbols[0]) +
-            self.get_balance(self.reward_balances, symbols[0]),
-            self.get_balance(self.available_balances, symbols[1]) + self.get_balance(self.saving_balances, symbols[1]) +
-            self.get_balance(self.reward_balances, symbols[1]),
-            self.get_balance(self.available_balances, symbols[2]) + self.get_balance(self.reward_balances, symbols[2]),
-        ]
+        symbols = []
+        for balance in self.available_balances:
+            symbols.append(balance["symbol"])
+        ret = []
+        for i in range(len(symbols)):
+            ret.append(self.get_balance(self.available_balances, symbols[i]) + self.get_balance(self.saving_balances, symbols[i]) +
+                       self.get_balance(self.reward_balances, symbols[i]))
+        return ret
 
     @property
     def balances(self):
@@ -742,7 +928,7 @@ class Account(BlockchainObject):
             .. code-block:: python
 
                 >>> from beem.account import Account
-                >>> account = Account("test")
+                >>> account = Account("beem.app")
                 >>> account.get_balance("rewards", "SBD")
                 0.000 SBD
 
@@ -845,7 +1031,10 @@ class Account(BlockchainObject):
         account = self["name"]
         global_properties = self.steem.get_dynamic_global_properties()
         reserve_ratio = self.steem.get_reserve_ratio()
-        received_vesting_shares = self["received_vesting_shares"].amount
+        if "received_vesting_shares" in self:
+            received_vesting_shares = self["received_vesting_shares"].amount
+        else:
+            received_vesting_shares = 0
         vesting_shares = self["vesting_shares"].amount
         max_virtual_bandwidth = float(reserve_ratio["max_virtual_bandwidth"])
         total_vesting_shares = Amount(global_properties["total_vesting_shares"], steem_instance=self.steem).amount
@@ -886,7 +1075,7 @@ class Account(BlockchainObject):
             .. code-block:: python
 
                 >>> from beem.account import Account
-                >>> account = Account("test")
+                >>> account = Account("beem.app")
                 >>> account.get_owner_history()
                 []
 
@@ -913,7 +1102,7 @@ class Account(BlockchainObject):
             .. code-block:: python
 
                 >>> from beem.account import Account
-                >>> account = Account("test")
+                >>> account = Account("beem.app")
                 >>> account.get_conversion_requests()
                 []
 
@@ -941,7 +1130,7 @@ class Account(BlockchainObject):
             .. code-block:: python
 
                 >>> from beem.account import Account
-                >>> account = Account("test")
+                >>> account = Account("beem.app")
                 >>> account.get_vesting_delegations()
                 []
 
@@ -968,7 +1157,7 @@ class Account(BlockchainObject):
             .. code-block:: python
 
                 >>> from beem.account import Account
-                >>> account = Account("test")
+                >>> account = Account("beem.app")
                 >>> account.get_withdraw_routes()
                 []
 
@@ -996,7 +1185,7 @@ class Account(BlockchainObject):
             .. code-block:: python
 
                 >>> from beem.account import Account
-                >>> account = Account("test")
+                >>> account = Account("beem.app")
                 >>> account.get_savings_withdrawals()
                 []
 
@@ -1025,8 +1214,9 @@ class Account(BlockchainObject):
             .. code-block:: python
 
                 >>> from beem.account import Account
-                >>> account = Account("test")
+                >>> account = Account("beem.app")
                 >>> account.get_recovery_request()
+                []
 
         """
         if account is None:
@@ -1052,8 +1242,9 @@ class Account(BlockchainObject):
             .. code-block:: python
 
                 >>> from beem.account import Account
-                >>> account = Account("test")
+                >>> account = Account("beem.app")
                 >>> account.get_escrow(1234)
+                []
 
         """
         if account is None:
@@ -1111,7 +1302,7 @@ class Account(BlockchainObject):
             .. code-block:: python
 
                 >>> from beem.account import Account
-                >>> account = Account("test")
+                >>> account = Account("beem.app")
                 >>> account.get_tags_used_by_author()
                 []
 
@@ -1124,7 +1315,7 @@ class Account(BlockchainObject):
             raise OfflineHasNoRPCException("No RPC available in offline mode!")
         self.steem.rpc.set_next_node_on_empty_reply(False)
         if self.steem.rpc.get_use_appbase():
-            return self.steem.rpc.get_tags_used_by_author({'account': account}, api="tags")['tags']
+            return self.steem.rpc.get_tags_used_by_author({'author': account}, api="tags")['tags']
         else:
             return self.steem.rpc.get_tags_used_by_author(account, api="tags")
 
@@ -1140,7 +1331,7 @@ class Account(BlockchainObject):
             .. code-block:: python
 
                 >>> from beem.account import Account
-                >>> account = Account("test")
+                >>> account = Account("beem.app")
                 >>> account.get_expiring_vesting_delegations()
                 []
 
@@ -1160,7 +1351,18 @@ class Account(BlockchainObject):
             return self.steem.rpc.get_expiring_vesting_delegations(account, formatTimeString(after), limit)
 
     def get_account_votes(self, account=None):
-        """Returns all votes that the account has done"""
+        """ Returns all votes that the account has done
+
+            :rtype: list
+
+            .. code-block:: python
+
+                >>> from beem.account import Account
+                >>> account = Account("beem.app")
+                >>> account.get_account_votes()
+                []
+
+        """
         if account is None:
             account = self["name"]
         elif isinstance(account, Account):
@@ -1169,7 +1371,7 @@ class Account(BlockchainObject):
             raise OfflineHasNoRPCException("No RPC available in offline mode!")
         self.steem.rpc.set_next_node_on_empty_reply(False)
         if self.steem.rpc.get_use_appbase():
-            return self.steem.rpc.get_account_votes(account)
+            return self.steem.rpc.get_account_votes(account, api="condenser")
         else:
             return self.steem.rpc.get_account_votes(account)
 
@@ -1229,7 +1431,7 @@ class Account(BlockchainObject):
             ret = self.steem.rpc.get_account_history(account["name"], start, limit, api="database")
         return ret
 
-    def estimate_virtual_op_num(self, blocktime, stop_diff=1, max_count=100):
+    def estimate_virtual_op_num(self, blocktime, stop_diff=0, max_count=100):
         """ Returns an estimation of an virtual operation index for a given time or blockindex
 
             :param int/datetime blocktime: start time or start block index from which account
@@ -1270,89 +1472,87 @@ class Account(BlockchainObject):
                 print(block_est - block_num)
 
         """
+        def get_blocknum(index):
+            op = self._get_account_history(start=(index))
+            return op[0][1]['block']
+
         max_index = self.virtual_op_count()
-        created = self["created"]
-        if stop_diff <= 0:
-            raise ValueError("stop_diff <= 0 is not allowed and would lead to an endless lopp...")
-        if not isinstance(blocktime, (datetime, date, time)):
-            b = Blockchain(steem_instance=self.steem)
-            created_blocknum = b.get_estimated_block_num(created, accurate=True)
-            if blocktime < created_blocknum:
-                return 0
-        else:
-            blocktime = addTzInfo(blocktime)
-            if blocktime < created:
-                return 0
         if max_index < stop_diff:
             return 0
 
-        op_last = self._get_account_history(start=-1)
-        if isinstance(op_last, list) and len(op_last) > 0 and len(op_last[0]) > 0:
-            last_trx = op_last[0][1]
-        else:
-            return 0
+        # calculate everything with block numbers
+        created = get_blocknum(0)
 
+        # convert blocktime to block number if given as a datetime/date/time
         if isinstance(blocktime, (datetime, date, time)):
-            account_lifespan_sec = (formatTimeString(last_trx["timestamp"]) - created).total_seconds()
-            if (formatTimeString(last_trx["timestamp"]) - blocktime).total_seconds() < 0:
-                return max_index
-            factor = account_lifespan_sec / max_index or 1
-            first_op_num = int((blocktime - created).total_seconds() / factor)
+            b = Blockchain(steem_instance=self.steem)
+            target_blocknum = b.get_estimated_block_num(addTzInfo(blocktime), accurate=True)
         else:
-            account_lifespan_block = (last_trx["block"] - created_blocknum)
-            if (last_trx["block"] - blocktime) < 0:
-                return max_index
-            factor = account_lifespan_block / max_index or 1
-            first_op_num = (blocktime - created_blocknum) / factor
-        estimated_op_num = int(first_op_num)
-        op_diff = stop_diff + 1
-        op_num_1 = estimated_op_num + 1
-        op_num_2 = estimated_op_num + 2
-        cnt = 0
-        op_start_last = None
-        op_start = None
+            target_blocknum = blocktime
 
-        while (op_diff > stop_diff or op_diff < -stop_diff) and (max_count < 0 or cnt < max_count) and op_num_2 != estimated_op_num:
-            op_num_2 = op_num_1
-            op_num_1 = (estimated_op_num)
-            op_start_last = op_start
-            op_start = self._get_account_history(start=(estimated_op_num))
-            if isinstance(op_start, list) and len(op_start) > 0 and len(op_start[0]) > 0:
-                trx = op_start[0][1]
-                estimated_op_num = op_start[0][0]
-            else:
-                return 0
-
-            if op_start_last is not None:
-                diff_op = (op_start_last[0][0] - estimated_op_num)
-                if diff_op == 0:
-                    factor = 1
-                elif isinstance(blocktime, (datetime, date, time)):
-                    factor = (formatTimeString(op_start_last[0][1]["timestamp"]) - formatTimeString(trx["timestamp"])).total_seconds() / diff_op
-                else:
-                    factor = ((op_start_last[0][1]["block"] - trx["block"]) / diff_op)
-                if factor == 0:
-                    factor = 1
-            if isinstance(blocktime, (datetime, date, time)):
-                op_diff = (blocktime - formatTimeString(trx["timestamp"])).total_seconds() / factor
-            else:
-                op_diff = (blocktime - trx["block"]) / factor
-            if op_diff > max_index / 10.:
-                estimated_op_num += math.ceil(max_index / 10.)
-            elif op_diff > 0:
-                estimated_op_num += math.ceil(op_diff)
-            elif op_diff < (-max_index / 10.):
-                estimated_op_num += math.floor((-max_index / 10.))
-            else:
-                estimated_op_num += math.floor(op_diff)
-            cnt += 1
-
-        if estimated_op_num < 0:
+        # the requested blocknum/timestamp is before the account creation date
+        if target_blocknum <= created:
             return 0
-        elif estimated_op_num > max_index:
+
+        # get the block number from the account's latest operation
+        latest_blocknum = get_blocknum(-1)
+
+        # requested blocknum/timestamp is after the latest account operation
+        if target_blocknum >= latest_blocknum:
             return max_index
-        else:
-            return estimated_op_num
+
+        # all account ops in a single block
+        if latest_blocknum - created == 0:
+            return 0
+
+        # set initial search range
+        op_num = 0
+        op_lower = 0
+        block_lower = created
+        op_upper = max_index
+        block_upper = latest_blocknum
+        last_op_num = None
+        cnt = 0
+
+        while True:
+            # check if the maximum number of iterations was reached
+            if max_count != -1 and cnt >= max_count:
+                # did not converge, return the current state
+                return op_num
+
+            # linear approximation between the known upper and
+            # lower bounds for the first iteration
+            if cnt < 1:
+                op_num = int((target_blocknum - block_lower) /
+                             (block_upper - block_lower) *
+                             (op_upper - op_lower) + op_lower)
+            else:
+                # divide and conquer for the following iterations
+                op_num = int((op_upper + op_lower) / 2)
+                if op_upper == op_lower + 1:  # round up if we're close to target
+                    op_num += 1
+
+            # get block number for current op number estimation
+            if op_num != last_op_num:
+                block_num = get_blocknum(op_num)
+                last_op_num = op_num
+
+            # check if the required accuracy was reached
+            if op_upper - op_lower <= stop_diff or \
+               op_upper == op_lower + 1:
+                return op_num
+
+            # set new upper/lower boundaries for next iteration
+            if block_num < target_blocknum:
+                # current op number was too low -> search upwards
+                op_lower = op_num
+                block_lower = block_num
+            else:
+                # current op number was too high or matched the target block
+                # -> search downwards
+                op_upper = op_num
+                block_upper = block_num
+            cnt += 1
 
     def get_curation_reward(self, days=7):
         """Returns the curation reward of the last `days` days
@@ -1360,7 +1560,7 @@ class Account(BlockchainObject):
             :param int days: limit number of days to be included int the return value
         """
         stop = addTzInfo(datetime.utcnow()) - timedelta(days=days)
-        reward_vests = Amount("0 VESTS", steem_instance=self.steem)
+        reward_vests = Amount(0, self.steem.vests_symbol, steem_instance=self.steem)
         for reward in self.history_reverse(stop=stop, use_block_num=False, only_ops=["curation_reward"]):
             reward_vests += Amount(reward['reward'], steem_instance=self.steem)
         return self.steem.vests_to_sp(reward_vests.amount)
@@ -1453,7 +1653,14 @@ class Account(BlockchainObject):
                 return
             elif stop is not None and not use_block_num and order == -1 and item_index < stop:
                 return
-            op_type, op = event['op']
+
+            if isinstance(event['op'], list):
+                op_type, op = event['op']
+            else:
+                op_type = event['op']['type']
+                if len(op_type) > 10 and op_type[len(op_type) - 10:] == "_operation":
+                    op_type = op_type[:-10]
+                op = event['op']['value']
             block_props = remove_from_dict(event, keys=['op'], keep_keys=False)
 
             def construct_op(account_name):
@@ -1596,6 +1803,8 @@ class Account(BlockchainObject):
             _limit = max_index - start_index + 1
             first = start_index + _limit
         last_round = False
+        if _limit < 0:
+            return
         while True:
             # RPC call
             for item in self.get_account_history(first, _limit, start=None, stop=None, order=1, raw_output=raw_output):
@@ -1720,6 +1929,8 @@ class Account(BlockchainObject):
         """
         _limit = batch_size
         first = self.virtual_op_count()
+        start = addTzInfo(start)
+        stop = addTzInfo(stop)
         if not first or not batch_size:
             return
         if start is not None and isinstance(start, int) and start < 0 and not use_block_num:
@@ -1750,8 +1961,6 @@ class Account(BlockchainObject):
             first = op_est + est_diff
         if stop is not None and isinstance(stop, int) and stop < 0 and not use_block_num:
             stop += first
-        start = addTzInfo(start)
-        stop = addTzInfo(stop)
 
         while True:
             # RPC call
@@ -1868,10 +2077,10 @@ class Account(BlockchainObject):
             .. code-block:: python
 
                 from beem.account import Account
-                acc = Account("test")
-                profile = acc.profile
+                account = Account("test")
+                profile = account.profile
                 profile["about"] = "test account"
-                acc.update_account_profile(profile)
+                account.update_account_profile(profile)
 
         """
         if account is None:
@@ -2047,12 +2256,8 @@ class Account(BlockchainObject):
             to = self  # powerup on the same account
         else:
             to = Account(to, steem_instance=self.steem)
-        if isinstance(amount, (string_types, Amount)):
-            amount = Amount(amount, steem_instance=self.steem)
-        else:
-            amount = Amount(amount, "STEEM", steem_instance=self.steem)
-        if not amount["symbol"] == "STEEM":
-            raise AssertionError()
+        amount = self._check_amount(amount, self.steem.steem_symbol)
+
         to = Account(to, steem_instance=self.steem)
 
         op = operations.Transfer_to_vesting(**{
@@ -2077,12 +2282,7 @@ class Account(BlockchainObject):
             account = self
         else:
             account = Account(account, steem_instance=self.steem)
-        if isinstance(amount, (string_types, Amount)):
-            amount = Amount(amount, steem_instance=self.steem)
-        else:
-            amount = Amount(amount, "SBD", steem_instance=self.steem)
-        if not amount["symbol"] == "SBD":
-            raise AssertionError()
+        amount = self._check_amount(amount, self.steem.sbd_symbol)
         if request_id:
             request_id = int(request_id)
         else:
@@ -2201,10 +2401,21 @@ class Account(BlockchainObject):
         })
         return self.steem.finalizeOp(op, account, "active", **kwargs)
 
+    def _check_amount(self, amount, symbol):
+        if isinstance(amount, (float, integer_types)):
+            amount = Amount(amount, symbol, steem_instance=self.steem)
+        elif isinstance(amount, string_types) and amount.replace('.', '', 1).replace(',', '', 1).isdigit():
+            amount = Amount(float(amount), symbol, steem_instance=self.steem)
+        else:
+            amount = Amount(amount, steem_instance=self.steem)
+        if not amount["symbol"] == symbol:
+            raise AssertionError()
+        return amount
+
     def claim_reward_balance(self,
-                             reward_steem='0 STEEM',
-                             reward_sbd='0 SBD',
-                             reward_vests='0 VESTS',
+                             reward_steem=0,
+                             reward_sbd=0,
+                             reward_vests=0,
                              account=None, **kwargs):
         """ Claim reward balances.
         By default, this will claim ``all`` outstanding balances. To bypass
@@ -2227,26 +2438,11 @@ class Account(BlockchainObject):
 
         # if no values were set by user, claim all outstanding balances on
         # account
-        if isinstance(reward_steem, (string_types, Amount)):
-            reward_steem = Amount(reward_steem, steem_instance=self.steem)
-        else:
-            reward_steem = Amount(reward_steem, "STEEM", steem_instance=self.steem)
-        if not reward_steem["symbol"] == "STEEM":
-            raise AssertionError()
 
-        if isinstance(reward_sbd, (string_types, Amount)):
-            reward_sbd = Amount(reward_sbd, steem_instance=self.steem)
-        else:
-            reward_sbd = Amount(reward_sbd, "SBD", steem_instance=self.steem)
-        if not reward_sbd["symbol"] == "SBD":
-            raise AssertionError()
+        reward_steem = self._check_amount(reward_steem, self.steem.steem_symbol)
+        reward_sbd = self._check_amount(reward_sbd, self.steem.sbd_symbol)
+        reward_vests = self._check_amount(reward_vests, self.steem.vests_symbol)
 
-        if isinstance(reward_vests, (string_types, Amount)):
-            reward_vests = Amount(reward_vests, steem_instance=self.steem)
-        else:
-            reward_vests = Amount(reward_vests, "VESTS", steem_instance=self.steem)
-        if not reward_vests["symbol"] == "VESTS":
-            raise AssertionError()
         if reward_steem.amount == 0 and reward_sbd.amount == 0 and reward_vests.amount == 0:
             reward_steem = account.balances["rewards"][0]
             reward_sbd = account.balances["rewards"][1]
@@ -2260,6 +2456,7 @@ class Account(BlockchainObject):
                 "reward_vests": reward_vests,
                 "prefix": self.steem.prefix,
             })
+        print(op)
         return self.steem.finalizeOp(op, account, "posting", **kwargs)
 
     def delegate_vesting_shares(self, to_account, vesting_shares,
@@ -2280,12 +2477,8 @@ class Account(BlockchainObject):
         to_account = Account(to_account, steem_instance=self.steem)
         if to_account is None:
             raise ValueError("You need to provide a to_account")
-        if isinstance(vesting_shares, (string_types, Amount)):
-            vesting_shares = Amount(vesting_shares, steem_instance=self.steem)
-        else:
-            vesting_shares = Amount(vesting_shares, "VESTS", steem_instance=self.steem)
-        if not vesting_shares["symbol"] == "VESTS":
-            raise AssertionError()
+        vesting_shares = self._check_amount(vesting_shares, self.steem.vests_symbol)
+
         op = operations.Delegate_vesting_shares(
             **{
                 "delegator": account["name"],
@@ -2308,12 +2501,8 @@ class Account(BlockchainObject):
             account = self
         else:
             account = Account(account, steem_instance=self.steem)
-        if isinstance(amount, (string_types, Amount)):
-            amount = Amount(amount, steem_instance=self.steem)
-        else:
-            amount = Amount(amount, "VESTS", steem_instance=self.steem)
-        if not amount["symbol"] == "VESTS":
-            raise AssertionError()
+        amount = self._check_amount(amount, self.steem.vests_symbol)
+
         op = operations.Withdraw_vesting(
             **{
                 "account": account["name"],
@@ -2506,6 +2695,276 @@ class Account(BlockchainObject):
         else:
             return self.steem.finalizeOp(op, account, "active", **kwargs)
 
+    def feed_history(self, limit=None, start_author=None, start_permlink=None,
+                     account=None):
+        """ stream the feed entries of an account in reverse time order.
+                Note that RPC nodes keep a limited history of entries for the
+                user feed. Older entries may not be available via this call due
+                to these node limitations.
+
+            :param int limit: (optional) stream the latest `limit`
+                feed entries. If unset (default), all available entries
+                are streamed.
+            :param str start_author: (optional) start streaming the
+                replies from this author. `start_permlink=None`
+                (default) starts with the latest available entry.
+                If set, `start_permlink` has to be set as well.
+            :param str start_permlink: (optional) start streaming the
+                replies from this permlink. `start_permlink=None`
+                (default) starts with the latest available entry.
+                If set, `start_author` has to be set as well.
+            :param str account: (optional) the account to get replies
+                to (defaults to ``default_account``)
+
+            comment_history_reverse example:
+
+            .. code-block:: python
+
+                from beem.account import Account
+                acc = Account("ned")
+                for reply in acc.feed_history(limit=10):
+                    print(reply)
+
+        """
+        if limit is not None:
+            if not isinstance(limit, integer_types) or limit <= 0:
+                raise AssertionError("`limit` has to be greater than 0`")
+        if (start_author is None and start_permlink is not None) or \
+           (start_author is not None and start_permlink is None):
+            raise AssertionError("either both or none of `start_author` and "
+                                 "`start_permlink` have to be set")
+
+        if account is None:
+            account = self
+        else:
+            account = Account(account, steem_instance=self.steem)
+        feed_count = 0
+        while True:
+            query_limit = 100
+            if limit is not None:
+                query_limit = min(limit - feed_count + 1, query_limit)
+            from .discussions import Query, Discussions_by_feed
+            query = Query(start_author=start_author,
+                          start_permlink=start_permlink, limit=query_limit,
+                          tag=account['name'])
+            results = Discussions_by_feed(query, steem_instance=self.steem)
+            if len(results) == 0 or (start_permlink and len(results) == 1):
+                return
+            if feed_count > 0 and start_permlink:
+                results = results[1:]  # strip duplicates from previous iteration
+            for entry in results:
+                feed_count += 1
+                yield entry
+                start_permlink = entry['permlink']
+                start_author = entry['author']
+                if feed_count == limit:
+                    return
+
+    def blog_history(self, limit=None, start=-1, reblogs=True, account=None):
+        """ stream the blog entries done by an account in reverse time order.
+                Note that RPC nodes keep a limited history of entries for the
+                user blog. Older blog posts of an account may not be available
+                via this call due to these node limitations.
+
+            :param int limit: (optional) stream the latest `limit`
+                blog entries. If unset (default), all available blog
+                entries are streamed.
+            :param int start: (optional) start streaming the blog
+                entries from this index. `start=-1` (default) starts
+                with the latest available entry.
+            :param bool reblogs: (optional) if set `True` (default)
+                reblogs / resteems are included. If set `False`,
+                reblogs/resteems are omitted.
+            :param str account: (optional) the account to stream blog
+                entries for (defaults to ``default_account``)
+
+            blog_history_reverse example:
+
+            .. code-block:: python
+
+                from beem.account import Account
+                acc = Account("steemitblog")
+                for post in acc.blog_history(limit=10):
+                    print(post)
+
+        """
+        if limit is not None:
+            if not isinstance(limit, integer_types) or limit <= 0:
+                raise AssertionError("`limit` has to be greater than 0`")
+
+        if account is None:
+            account = self
+        else:
+            account = Account(account, steem_instance=self.steem)
+
+        post_count = 0
+        start_permlink = None
+        start_author = None
+        while True:
+            query_limit = 100
+            if limit is not None and reblogs:
+                query_limit = min(limit - post_count + 1, query_limit)
+            if not start_permlink:
+                # first iteration uses `get_blog`
+                results = self.get_blog(start_entry_id=start,
+                                        account=account,
+                                        limit=query_limit)
+            else:
+                # all following iterations use `get_discussions_by_blog`
+                from .discussions import Query, Discussions_by_blog
+                query = Query(start_author=start_author,
+                              start_permlink=start_permlink,
+                              limit=query_limit, tag=account['name'])
+                results = Discussions_by_blog(query,
+                                              steem_instance=self.steem)
+            if len(results) == 0 or (start_permlink and len(results) == 1):
+                return
+            if start_permlink:
+                results = results[1:]  # strip duplicates from previous iteration
+            for post in results:
+                if post['author'] == '':
+                    continue
+                if (reblogs or post['author'] == account['name']):
+                    post_count += 1
+                    yield post
+                start_permlink = post['permlink']
+                start_author = post['author']
+                if post_count == limit:
+                    return
+
+    def comment_history(self, limit=None, start_permlink=None,
+                        account=None):
+        """ stream the comments done by an account in reverse time order.
+                Note that RPC nodes keep a limited history of entries
+                for the user comments. Older comments by an account
+                may not be available via this call due to these node
+                limitations.
+
+            :param int limit: (optional) stream the latest `limit`
+                comments. If unset (default), all available comments
+                are streamed.
+            :param str start_permlink: (optional) start streaming the
+                comments from this permlink. `start_permlink=None`
+                (default) starts with the latest available entry.
+            :param str account: (optional) the account to stream
+                comments for (defaults to ``default_account``)
+
+            comment_history_reverse example:
+
+            .. code-block:: python
+
+                from beem.account import Account
+                acc = Account("ned")
+                for comment in acc.comment_history(limit=10):
+                    print(comment)
+
+        """
+        if limit is not None:
+            if not isinstance(limit, integer_types) or limit <= 0:
+                raise AssertionError("`limit` has to be greater than 0`")
+
+        if account is None:
+            account = self
+        else:
+            account = Account(account, steem_instance=self.steem)
+
+        comment_count = 0
+        while True:
+            query_limit = 100
+            if limit is not None:
+                query_limit = min(limit - comment_count + 1, query_limit)
+            from .discussions import Query, Discussions_by_comments
+            query = Query(start_author=account['name'],
+                          start_permlink=start_permlink,
+                          limit=query_limit, tag=account['name'])
+            results = Discussions_by_comments(query,
+                                              steem_instance=self.steem)
+            if len(results) == 0 or (start_permlink and len(results) == 1):
+                return
+            if comment_count > 0 and start_permlink:
+                results = results[1:]  # strip duplicates from previous iteration
+            for comment in results:
+                if comment["permlink"] == '':
+                    continue
+                comment_count += 1
+                yield comment
+                start_permlink = comment['permlink']
+                if comment_count == limit:
+                    return
+
+    def reply_history(self, limit=None, start_author=None,
+                      start_permlink=None, account=None):
+        """ stream the replies to an account in reverse time order.
+                Note that RPC nodes keep a limited history of entries
+                for the replies to an author. Older replies to an account
+                may not be available via this call due to these node
+                limitations.
+
+            :param int limit: (optional) stream the latest `limit`
+                replies. If unset (default), all available replies
+                are streamed.
+            :param str start_author: (optional) start streaming the
+                replies from this author. `start_permlink=None`
+                (default) starts with the latest available entry.
+                If set, `start_permlink` has to be set as well.
+            :param str start_permlink: (optional) start streaming the
+                replies from this permlink. `start_permlink=None`
+                (default) starts with the latest available entry.
+                If set, `start_author` has to be set as well.
+            :param str account: (optional) the account to get replies
+                to (defaults to ``default_account``)
+
+            comment_history_reverse example:
+
+            .. code-block:: python
+
+                from beem.account import Account
+                acc = Account("ned")
+                for reply in acc.reply_history(limit=10):
+                    print(reply)
+
+        """
+        if limit is not None:
+            if not isinstance(limit, integer_types) or limit <= 0:
+                raise AssertionError("`limit` has to be greater than 0`")
+        if (start_author is None and start_permlink is not None) or \
+           (start_author is not None and start_permlink is None):
+            raise AssertionError("either both or none of `start_author` and "
+                                 "`start_permlink` have to be set")
+
+        if account is None:
+            account = self
+        else:
+            account = Account(account, steem_instance=self.steem)
+
+        if start_author is None:
+            start_author = account['name']
+
+        reply_count = 0
+        while True:
+            query_limit = 100
+            if limit is not None:
+                query_limit = min(limit - reply_count + 1, query_limit)
+            from .discussions import Query, Replies_by_last_update
+            query = Query(start_parent_author=start_author,
+                          start_permlink=start_permlink,
+                          limit=query_limit)
+            results = Replies_by_last_update(query,
+                                             steem_instance=self.steem)
+            if len(results) == 0 or (start_permlink and len(results) == 1):
+                return
+            if reply_count > 0 and start_permlink:
+                results = results[1:]  # strip duplicates from previous iteration
+            for reply in results:
+                if reply['author'] == '':
+                    continue
+                reply_count += 1
+                yield reply
+                start_author = reply['author']
+                start_permlink = reply['permlink']
+                if reply_count == limit:
+                    return
+
 
 class AccountsObject(list):
     def printAsTable(self):
@@ -2570,7 +3029,7 @@ class Accounts(AccountsObject):
         :param int batch_limit: (optional) maximum number of accounts
             to fetch per call, defaults to 100
         :param steem steem_instance: Steem() instance to use when
-            accessing a RPC
+            accessing a RPCcreator = Account(creator, steem_instance=self)
     """
     def __init__(self, name_list, batch_limit=100, lazy=False, full=True, steem_instance=None):
         self.steem = steem_instance or shared_steem_instance()

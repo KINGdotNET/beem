@@ -27,18 +27,12 @@ class Testcases(unittest.TestCase):
         nodelist.update_nodes(steem_instance=Steem(node=nodelist.get_nodes(normal=True, appbase=True), num_retries=10))
 
         cls.stm = Steem(
-            node=nodelist.get_nodes(appbase=False),
+            node=nodelist.get_nodes(),
             nobroadcast=True,
             # We want to bundle many operations into a single transaction
             bundle=True,
             num_retries=10
             # Overwrite wallet to use this list of wifs only
-        )
-        cls.appbase = Steem(
-            node=nodelist.get_nodes(normal=False, appbase=True),
-            nobroadcast=True,
-            bundle=True,
-            num_retries=10
         )
         cls.stm.set_default_account("test")
         set_shared_steem_instance(cls.stm)
@@ -87,15 +81,8 @@ class Testcases(unittest.TestCase):
         private = self.wallet.getPrivateKeyForPublicKey(pub)
         self.assertEqual(private, wif)
 
-    @parameterized.expand([
-        ("non_appbase"),
-        ("appbase"),
-    ])
-    def test_account_by_pub(self, node_param):
-        if node_param == "non_appbase":
-            stm = self.stm
-        else:
-            stm = self.appbase
+    def test_account_by_pub(self):
+        stm = self.stm
         self.wallet.steem = stm
         self.wallet.unlock(pwd="TestingOneTwoThree")
         acc = Account("gtg")
@@ -114,15 +101,8 @@ class Testcases(unittest.TestCase):
         self.assertEqual("gtg", acc_by_pub_list[0]["name"])
         self.assertEqual(pub, acc_by_pub_list[0]["pubkey"])
 
-    @parameterized.expand([
-        ("non_appbase"),
-        ("appbase"),
-    ])
-    def test_pub_lookup(self, node_param):
-        if node_param == "non_appbase":
-            stm = self.stm
-        else:
-            stm = self.appbase
+    def test_pub_lookup(self):
+        stm = self.stm
         self.wallet.steem = stm
         self.wallet.unlock(pwd="TestingOneTwoThree")
         with self.assertRaises(
@@ -142,15 +122,8 @@ class Testcases(unittest.TestCase):
         ):
             self.wallet.getPostingKeyForAccount("test")
 
-    @parameterized.expand([
-        ("non_appbase"),
-        ("appbase"),
-    ])
-    def test_pub_lookup_keys(self, node_param):
-        if node_param == "non_appbase":
-            stm = self.stm
-        else:
-            stm = self.appbase
+    def test_pub_lookup_keys(self):
+        stm = self.stm
         self.wallet.steem = stm
         self.wallet.unlock(pwd="TestingOneTwoThree")
         with self.assertRaises(
